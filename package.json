@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
-    "test:live": "LIVE_BINANCE=1 vitest run src/data/binance.live.test.ts"
+    "test:live": "LIVE_BINANCE=1 vitest run src/data/binance.live.test.ts",
+    "test:studio": "LIVE_STUDIO=1 vitest run src/data/contract/studio.live.test.ts"
   },
   "dependencies": {
     "genlayer-js": "^1.1.8",

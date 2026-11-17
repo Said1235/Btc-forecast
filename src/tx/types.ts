@@ -24,8 +24,8 @@ export const UNRESOLVED: ReadonlySet<TxState> = new Set<TxState>([
 export const TERMINAL: ReadonlySet<TxState> = new Set<TxState>(["finalized-ok", "finalized-error", "undetermined", "rejected"]);
 
 export interface JournalArgs {
-  marketId: string;
-  pick: Outcome;
+  marketId: string; // UTC date, YYYY-MM-DD
+  pick?: Outcome; // only for submit_prediction
 }
 
 export interface JournalEntry {
@@ -57,13 +57,13 @@ export interface SubmitContext {
 
 export type ReceiptView =
   | { phase: "processing" | "decision" | "finalizing" }
-  | { phase: "finalized"; executionOk: boolean; executionResult: string }
+  | { phase: "finalized"; executionOk: boolean; executionResult: string; detail?: string }
   | { phase: "undetermined"; detail: string };
 
 /** What the tracker needs from a network. A deterministic mock implements it in tests. */
 export interface TxProvider {
   submit(ctx: SubmitContext): Promise<{ kind: "hash"; txHash: string } | { kind: "rejected" }>;
   getReceipt(txHash: string): Promise<ReceiptView>;
-  /** authoritative read-back for the ORIGINAL wallet and exact market */
-  readBack(wallet: string, marketId: string): Promise<Outcome | null>;
+  /** authoritative read-back using the entry's ORIGINAL wallet, method and exact market */
+  readBack(entry: JournalEntry): Promise<{ ok: boolean; observed: string }>;
 }

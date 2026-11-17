@@ -31,7 +31,7 @@ describe("landing", () => {
   });
 });
 
-describe("live mode without contract", () => {
+describe("live mode (StudioNet)", () => {
   it("shows a market-data error with retry, never silently falls back to demo", async () => {
     setHash("#/app");
     render(<App />);
@@ -40,14 +40,17 @@ describe("live mode without contract", () => {
     expect(screen.getByRole("button", { name: /retry now/i })).toBeInTheDocument();
     expect(screen.queryByTestId("chart")).toBeNull();
   });
-  it("shows integration-not-configured (not an RPC failure) and an unverified, non-submittable selector", async () => {
+  it("shows the network and contract in use and asks for a wallet instead of guessing", async () => {
     setHash("#/app");
     render(<App />);
-    expect(await screen.findByText(/Contract integration not configured/)).toBeInTheDocument();
-    expect(screen.getByText(/Cannot verify or record predictions yet/)).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /UP/ })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /review prediction/i })).toBeNull();
+    const net = await screen.findByTestId("net-info");
+    expect(net).toHaveTextContent(/StudioNet/);
+    expect(net).toHaveTextContent("61999");
+    expect(net).toHaveTextContent(/0x8AB7b7…e7e2b7/);
+    expect(screen.getByRole("link", { name: /0x8AB7b7…e7e2b7/ })).toHaveAttribute("href", "https://explorer-studio.genlayer.com/address/0x8AB7b7FB6771cb91d65623964df704c075e7e2b7");
+    expect(screen.getByRole("button", { name: /connect wallet to continue/i })).toBeInTheDocument();
     expect(screen.getByText(/Connect a wallet to see your predictions/)).toBeInTheDocument();
+    expect(screen.queryByText(/not configured/i)).toBeNull();
   });
 });
 
@@ -72,15 +75,27 @@ describe("demo mode", () => {
     const dlg = screen.getByRole("dialog", { name: /confirm your prediction/i });
     expect(within(dlg).getByText(/will not send a transaction/i)).toBeInTheDocument();
     fireEvent.click(within(dlg).getByRole("button", { name: /run demo flow/i }));
-    const panel = await screen.findByTestId("tx-panel", undefined, { timeout: 4000 });
-    expect(panel).toHaveTextContent(/Simulated lifecycle/);
-    expect(panel).toHaveTextContent(/Waiting for wallet approval/);
-    await waitFor(() => expect(screen.getByTestId("tx-panel")).toHaveTextContent(/demo-0001/), { timeout: 4000 });
-    expect(screen.getByTestId("tx-panel")).not.toHaveTextContent(/0x[0-9a-f]{40}/i);
-    await waitFor(() => expect(screen.getByTestId("tx-panel")).toHaveTextContent(/Finalized and verified by read-back/), { timeout: 9000 });
-    // a second submission is no longer possible for this market
-    expect(screen.queryByRole("button", { name: /review prediction/i })).toBeNull();
-    expect(screen.getByText(/Prediction submitted/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByTestId("tx-panel").length).toBeGreaterThan(0), { timeout: 4000 });
+    const text = () => screen.getAllByTestId("tx-panel").map((p) => p.textContent).join(" | ");
+    await waitFor(() => expect(text()).toMatch(/demo-sub-0001/), { timeout: 4000 });
+    expect(text()).toMatch(/Simulated lifecycle/);
+    expect(text()).not.toMatch(/0x[0-9a-f]{40}/i);
+    await waitFor(() => expect(text()).toMatch(/Finalized and verified by read-back/), { timeout: 9000 });
+    // contract allows changing the call until the market opens: the record is shown and an update needs a different pick
+    const rec = await screen.findByTestId("onchain-pick", undefined, { timeout: 4000 });
+    expect(rec).toHaveTextContent(/Demo record/);
+    expect(rec).toHaveTextContent(/DOWN/);
+    expect(screen.getByRole("button", { name: /update prediction/i })).toBeDisabled();
+  }, 20000);
+  it("lists closed markets with the next contract step and runs the first resolution step", async () => {
+    demo(); setHash("#/app");
+    render(<App />);
+    await screen.findByText("DEMO MODE");
+    const start = await screen.findByRole("button", { name: /start resolution|confirm resolution/i }, { timeout: 4000 }).catch(() => null);
+    if (!start) return; // first 5 minutes of a UTC day: resolution window not open yet
+    fireEvent.click(start);
+    await waitFor(() => expect(screen.getAllByTestId("tx-panel").some((p) => /Resolution/.test(p.textContent ?? ""))).toBe(true), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByText(/Provisional/)).toBeInTheDocument(), { timeout: 9000 });
   }, 20000);
   it("arrow keys move the selection", async () => {
     demo(); setHash("#/app");
@@ -123,7 +138,7 @@ describe("accessibility basics", () => {
     setHash("#/app");
     render(<App />);
     expect(request).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /connect wallet/i })[0]);
     expect(request).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Wallet" })).toBeInTheDocument();
     delete (window as unknown as { ethereum?: unknown }).ethereum;

@@ -1,59 +1,55 @@
 import type { Outcome } from "../../domain/candle";
+import type { TxProvider } from "../../tx/types";
 
 /**
- * Frontend-side interface for the contract-backed features. These are UI concepts,
- * NOT contract method names. The real mapping is decided after the deployed
- * contract's source and schema are inspected.
+ * Frontend view of the deployed BTCForecast contract (contracts/btc_forecast.py).
+ * Reads map 1:1 to its public views; writes (submit_prediction, resolve_market,
+ * claim_points) go through the TxProvider so they are tracked by exact hash.
  */
 export type ProviderMode = "demo" | "live";
 
 export type Verified<T> =
   | { status: "ok"; value: T; readAt: number }
-  | { status: "not-configured" }
   | { status: "unavailable"; reason: string };
 
-export interface MarketContractState {
-  marketId: string; // UTC date
-  /** Whether the contract accepts predictions for this market. Contract is authoritative. */
-  predictionsOpen: boolean;
-  resolved: boolean;
-  result: Outcome | null;
-  /** distinguishes provisional from final, only if the contract exposes it */
-  final: boolean;
+/** get_market_candidate: provisional observation, NOT a settlement. */
+export interface Candidate {
+  openPrice: string;
+  closePrice: string;
+  outcome: Outcome;
+  observedAtMs: number;
+  confirmableAtMs: number;
 }
 
-export interface UserPrediction {
-  marketId: string;
-  wallet: string;
+/** get_market_result: the settlement the contract accepted. */
+export interface Settlement {
+  openPrice: string;
+  closePrice: string;
+  outcome: Outcome;
+  firstObservedAtMs: number;
+  resolvedAtMs: number;
+}
+
+export interface ChainMarket {
+  openTimeMs: number;
+  candidate: Candidate | null;
+  result: Settlement | null;
+}
+
+/** get_prediction */
+export interface ChainPrediction {
   pick: Outcome;
-  correct: boolean | null;
+  submittedAtMs: number;
+  processed: boolean; // true once claim_points ran
 }
-
-export interface SubmitRequest {
-  wallet: string;
-  marketId: string;
-  marketOpenTime: number;
-  pick: Outcome;
-}
-
-export type SubmitOutcome =
-  | { kind: "hash"; txHash: string } // real network hash (live) or a clearly demo id
-  | { kind: "rejected" } // user rejected before submission
-  | { kind: "uncertain"; detail: string }; // approved, but no hash returned
 
 export interface ContractAdapter {
   readonly mode: ProviderMode;
-  readonly configured: boolean;
-  readMarket(marketId: string): Promise<Verified<MarketContractState>>;
-  readUserPrediction(wallet: string, marketId: string): Promise<Verified<UserPrediction | null>>;
-  readUserPoints(wallet: string): Promise<Verified<number>>;
-  readHistory(wallet: string): Promise<Verified<UserPrediction[]>>;
-  submitPrediction(req: SubmitRequest): Promise<SubmitOutcome>;
+  readMarket(openTimeMs: number): Promise<Verified<ChainMarket>>;
+  readPrediction(wallet: string, openTimeMs: number): Promise<Verified<ChainPrediction | null>>;
+  readPoints(wallet: string): Promise<Verified<number>>;
+  /** Write + track provider. `getWalletProvider` is only called when a write happens. */
+  txProvider(getWalletProvider: () => unknown): TxProvider;
 }
 
-export class NotConfiguredError extends Error {
-  constructor() {
-    super("Contract integration is not configured.");
-    this.name = "NotConfiguredError";
-  }
-}
+export const CONTRACT_METHODS = { submit: "submit_prediction", resolve: "resolve_market", claim: "claim_points" } as const;

@@ -5,7 +5,6 @@ import { derivePresentation } from "../domain/presentation";
 import { formatUtcStamp, type MarketWindow } from "../domain/market";
 import { phaseAt } from "../domain/market";
 import { useApp } from "../state/AppContext";
-import { DuplicateSubmissionError } from "../tx/tracker";
 import { UNRESOLVED, type JournalEntry, type TxState } from "../tx/types";
 import { Banner, Dialog, Glyph, OutcomeTag } from "./parts";
 
@@ -26,6 +25,8 @@ export const TX_COPY: Record<TxState, { label: string; tone: "wait" | "ok" | "ba
 };
 const STAGES: TxState[][] = [["awaiting-approval", "submitting"], ["submitted"], ["processing", "decision"], ["finalizing"], ["finalized-ok", "finalized-error", "readback-mismatch"]];
 
+const OP_LABEL: Record<string, string> = { submit_prediction: "Prediction", resolve_market: "Resolution", claim_points: "Claim" };
+
 export function TxPanel({ entry, onResume }: { entry: JournalEntry; onResume: () => void }) {
   const c = TX_COPY[entry.state];
   const stage = STAGES.findIndex((s) => s.includes(entry.state));
@@ -35,7 +36,7 @@ export function TxPanel({ entry, onResume }: { entry: JournalEntry; onResume: ()
       <div className="tx__h"><span>{c.label}</span>{demo && <span className="chip chip--demo">DEMO</span>}</div>
       <div className="prog" aria-hidden="true">{STAGES.map((_, i) => <i key={i} className={i <= stage ? "on" : ""} />)}</div>
       <dl className="dl">
-        <dt>Prediction</dt><dd><OutcomeTag o={entry.args.pick} /> for {entry.args.marketId}</dd>
+        <dt>{OP_LABEL[entry.method] ?? entry.method}</dt><dd>{entry.args.pick ? <OutcomeTag o={entry.args.pick} /> : null} for {entry.args.marketId}</dd>
         <dt>{demo ? "Demo id" : "Tx hash"}</dt><dd className="num">{entry.txHash ?? "none yet"}</dd>
         <dt>Wallet</dt><dd className="num">{entry.wallet}</dd>
       </dl>
@@ -47,57 +48,56 @@ export function TxPanel({ entry, onResume }: { entry: JournalEntry; onResume: ()
 }
 
 export function PredictionPanel({ market, isNext }: { market: MarketWindow; isNext: boolean }) {
-  const { mode, adapter, account, entries, tracker, md, wallet, walletApi, wrongNetwork, netInfo, toast, user } = useApp();
+  const { mode, account, entries, md, wallet, walletApi, wrongNetwork, user, act, toast, refetchUser, config } = useApp();
   const [pick, setPick] = useState<Outcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const phase = phaseAt(market, md.now);
-  const mine = entries.filter((e) => e.wallet === account && e.args.marketId === market.date);
+  const row = user.rows.get(market.openTime);
+  const onchain = row?.prediction.status === "ok" ? row.prediction.value : null;
+  const mine = entries.filter((e) => e.wallet === account && e.method === "submit_prediction" && e.args.marketId === market.date);
   const latest = mine[mine.length - 1];
-  const hasUnresolved = mine.some((e) => UNRESOLVED.has(e.state) || e.state === "finalized-ok");
-  const pres = derivePresentation({ phase, mode, contractConfigured: adapter.configured, hasUnresolvedTx: hasUnresolved });
-  const done = latest?.state === "finalized-ok" ? latest.args.pick : null;
-  const shownPick = done ?? pick;
+  const hasUnresolved = mine.some((e) => UNRESOLVED.has(e.state));
+  const pres = derivePresentation({ phase, mode, contractReadable: user.status !== "unavailable", hasUnresolvedTx: hasUnresolved });
+  const shownPick = pick ?? onchain?.pick ?? null;
   const interactive = pres.selector === "edit";
   const needsWallet = mode === "live" && !account;
+  const changed = !!pick && pick !== onchain?.pick;
 
   const review = () => {
-    const v = validatePick(pick);
+    const v = validatePick(pick ?? onchain?.pick ?? null);
     if (!v.ok) return setError(v.error);
+    if (onchain && v.pick === onchain.pick) return setError(`You already predicted ${onchain.pick}. Pick a different option to change it.`);
+    setPick(v.pick);
     setError(null);
     setConfirm(true);
   };
 
   const submit = async () => {
     const v = validatePick(pick);
-    if (!v.ok || !account || busy) return;
+    if (!v.ok || busy) return;
     setBusy(true);
-    try {
-      const e = await tracker.submit({ ...netInfo, wallet: account, method: "submit_prediction", args: { marketId: market.date, pick: v.pick }, marketOpenTime: market.openTime });
-      setConfirm(false);
-      if (e.state === "finalized-ok") toast(mode === "demo" ? "Demo prediction recorded in this browser session only." : "Prediction confirmed by the contract.");
-    } catch (err) {
-      if (err instanceof DuplicateSubmissionError) setError("A prediction for this market is already being tracked. Wait for it to resolve.");
-      else setError((err as Error).message);
-      setConfirm(false);
-    } finally {
-      setBusy(false);
-    }
+    const r = await act("submit_prediction", market.openTime, v.pick);
+    setBusy(false);
+    setConfirm(false);
+    if (r.error) return setError(r.error);
+    if (r.entry?.state === "finalized-ok") { toast(mode === "demo" ? "Demo prediction recorded in this browser session only." : "Prediction confirmed by the contract."); setPick(null); }
+    refetchUser();
   };
 
   return (
     <section className="box" aria-labelledby="pred-h">
       <div className="box__h">
         <h2 id="pred-h">Your prediction</h2>
-        {mode === "demo" ? <span className="chip chip--demo">DEMO</span> : pres.unverified ? <span className="chip chip--stale">Unverified</span> : null}
+        {mode === "demo" ? <span className="chip chip--demo">DEMO</span> : pres.unverified ? <span className="chip chip--stale">Unverified</span> : <span className="chip chip--live">On-chain</span>}
       </div>
       <div className="box__b">
         <p className="q">Will BTCUSDT close above or below the open on {market.date}?</p>
         {!interactive && (
-          <Banner kind={pres.selector === "locked" ? "info" : pres.unverified ? "warn" : "info"} title={pres.selector === "locked" ? "Prediction locked" : pres.unverified ? "Cannot verify or record predictions yet" : "Prediction submitted"}>
-            <p>{pres.reason} {pres.unverified && "A local timer is not authoritative: once connected, the contract decides."}</p>
+          <Banner kind={pres.selector === "locked" ? "info" : pres.unverified ? "warn" : "info"} title={pres.selector === "locked" ? "Prediction locked" : pres.unverified ? "Cannot verify predictions right now" : "Operation in progress"}>
+            <p>{pres.reason} {pres.unverified && "A local timer is not authoritative: the contract decides."}</p>
           </Banner>
         )}
         <fieldset className="opts" role="radiogroup" aria-label="Prediction options" aria-describedby={error ? "pick-err" : undefined}>
@@ -115,33 +115,38 @@ export function PredictionPanel({ market, isNext }: { market: MarketWindow; isNe
           ))}
         </fieldset>
         {error && <p id="pick-err" className="field-err" role="alert">{error}</p>}
+        {onchain && (
+          <p className="state-line" data-testid="onchain-pick">
+            <span>{mode === "demo" ? "Demo record" : "Recorded on-chain"}: <b><OutcomeTag o={onchain.pick} /></b></span>
+            <span>submitted {formatUtcStamp(onchain.submittedAtMs)}</span>
+          </p>
+        )}
         {isNext && interactive && (
           needsWallet ? (
             <button className="btn btn--primary" onClick={() => void walletApi.connect(wallet.selectedId ?? undefined)}>Connect wallet to continue</button>
           ) : (
-            <button className="btn btn--primary" onClick={review} disabled={wrongNetwork}>Review prediction</button>
+            <button className="btn btn--primary" onClick={review} disabled={wrongNetwork || (!!onchain && !changed)}>{onchain ? "Update prediction" : "Review prediction"}</button>
           )
         )}
-        {wrongNetwork && <Banner kind="warn" title="Wrong network" actions={<button className="btn btn--sm" onClick={() => void walletApi.switchNetwork()}>Switch network</button>}><p>Your wallet is on chain {wallet.chainId}. Switch to continue. This app never switches it for you.</p></Banner>}
+        {wrongNetwork && <Banner kind="warn" title="Wrong network" actions={<button className="btn btn--sm" onClick={() => void walletApi.switchNetwork()}>Switch network</button>}><p>Your wallet is on chain {wallet.chainId}. GenLayer Studio is chain {config.chainId}. This app never switches it for you.</p></Banner>}
         <dl className="dl">
           <dt>Market</dt><dd>BTCUSDT · Binance Spot · 1d</dd>
           <dt>Opens</dt><dd className="num">{formatUtcStamp(market.openTime)}</dd>
           <dt>Points</dt><dd>1 point if correct, 0 if not. No stakes.</dd>
         </dl>
-        {latest && <TxPanel entry={latest} onResume={() => void tracker.track(latest.opId)} />}
-        {user.status === "ok" && !latest && mode === "demo" && <p style={{ color: "var(--muted)", fontSize: 14 }}>No demo prediction yet for this market.</p>}
+        {latest && <TxPanel entry={latest} onResume={() => void act("submit_prediction", market.openTime).then(() => undefined)} />}
       </div>
       {confirm && pick && (
-        <Dialog title="Confirm your prediction" labelId="cf-h" onClose={() => !busy && setConfirm(false)}>
+        <Dialog title={onchain ? "Confirm your change" : "Confirm your prediction"} labelId="cf-h" onClose={() => !busy && setConfirm(false)}>
           <dl className="dl">
             <dt>Market</dt><dd>BTCUSDT daily, {market.date}</dd>
             <dt>Opens</dt><dd className="num">{formatUtcStamp(market.openTime)}</dd>
-            <dt>Prediction</dt><dd><OutcomeTag o={pick} /> ({OUTCOME_COPY[pick].short})</dd>
+            <dt>Prediction</dt><dd><OutcomeTag o={pick} /> ({OUTCOME_COPY[pick].short}){onchain ? <> replacing <OutcomeTag o={onchain.pick} /></> : null}</dd>
           </dl>
           {mode === "demo" ? (
             <Banner kind="warn" title="Demo only">This will not send a transaction or write to any contract. It only shows how the flow behaves.</Banner>
           ) : (
-            <p style={{ color: "var(--muted)" }}>When the integration is enabled, this prediction is recorded through GenLayer and your wallet will ask you to approve it.</p>
+            <p style={{ color: "var(--muted)" }}>This is recorded through GenLayer (StudioNet, chain {config.chainId}). Your wallet will ask you to approve a transaction, and the result is shown only after the contract confirms it.</p>
           )}
           <div className="acts">
             <button className="btn" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button>

@@ -31,8 +31,9 @@ class MockProvider implements TxProvider {
     if (step instanceof Error) throw step;
     return typeof step === "function" ? step() : step;
   }
-  async readBack(wallet: string, marketId: string) {
-    return this.onChain.get(`${wallet}|${marketId}`) ?? null;
+  async readBack(entry: import("./types").JournalEntry) {
+    const got = this.onChain.get(`${entry.wallet}|${entry.args.marketId}`) ?? null;
+    return { ok: got === entry.args.pick, observed: got ?? "no prediction" };
   }
 }
 const ok: ReceiptView = { phase: "finalized", executionOk: true, executionResult: "FINISHED_WITH_RETURN" };

@@ -2,7 +2,7 @@
 
 Daily BTCUSDT candle prediction game (UP / DOWN / FLAT, 1 point per correct call). Points only, no stakes.
 
-Frontend: Vite + React + TypeScript. Market data from the Binance Spot public API. GenLayer contract integration is intentionally not connected yet.
+Frontend: Vite + React + TypeScript. Market data from the Binance Spot public API. Predictions, resolution and points use the BTCForecast Intelligent Contract on GenLayer StudioNet (see `src/config.ts`).
 
 ```
 npm install
@@ -10,6 +10,7 @@ npm run dev          # add ?demo=1 for Demo Mode
 npm run build
 npm run lint && npm test
 npm run test:live    # real Binance request
+npm run test:studio  # real StudioNet RPC + contract schema
 ```
 
 Details and what remains for the contract stage: `docs/FRONTEND_HANDOFF.md`.

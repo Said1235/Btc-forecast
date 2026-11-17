@@ -84,6 +84,10 @@ export class TxTracker {
       this.journal.bindHash(opId, out.txHash);
       this.journal.setState(opId, "submitted");
     } catch (e) {
+      if ((e as Error).name === "ContractRefusal") {
+        this.journal.setState(opId, "rejected", { lastError: `The contract refused this call before it was sent: ${(e as Error).message}. No transaction was submitted.` });
+        return this.journal.getByOp(opId)!;
+      }
       this.journal.setState(opId, "unknown-reconcile", {
         lastError: `Submission ended without a transaction hash (${(e as Error).message}). Check before submitting again.`,
       });
@@ -114,7 +118,7 @@ export class TxTracker {
         }
         if (view.phase === "finalized") {
           if (!view.executionOk) {
-            this.journal.setState(opId, "finalized-error", { executionResult: view.executionResult, lastError: "The network finalized the transaction, but contract execution did not complete successfully." });
+            this.journal.setState(opId, "finalized-error", { executionResult: view.executionResult, lastError: "The network finalized the transaction, but contract execution did not complete successfully." + (view.detail ? ` Contract said: ${view.detail}` : "") });
             return;
           }
           await this.verifyReadBack(opId, view.executionResult);
@@ -132,9 +136,9 @@ export class TxTracker {
   private async verifyReadBack(opId: string, executionResult: string) {
     const e = this.journal.getByOp(opId)!;
     try {
-      const got = await this.provider.readBack(e.wallet, e.args.marketId); // original wallet, exact market
-      if (got === e.args.pick) this.journal.setState(opId, "finalized-ok", { executionResult, lastError: null });
-      else this.journal.setState(opId, "readback-mismatch", { executionResult, lastError: `Contract read-back returned ${got ?? "no prediction"} but ${e.args.pick} was submitted.` });
+      const r = await this.provider.readBack(e); // original wallet, exact market, own method
+      if (r.ok) this.journal.setState(opId, "finalized-ok", { executionResult, lastError: null });
+      else this.journal.setState(opId, "readback-mismatch", { executionResult, lastError: `Contract read-back returned ${r.observed} but ${e.args.pick ?? e.method} was submitted.` });
     } catch (err) {
       this.journal.setState(opId, "tracking-unavailable", { executionResult, lastError: `Finalized, but the read-back failed: ${(err as Error).message}` });
     }

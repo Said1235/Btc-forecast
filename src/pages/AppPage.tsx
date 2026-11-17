@@ -3,9 +3,11 @@ import { useApp } from "../state/AppContext";
 import { CandleChart } from "../ui/CandleChart";
 import { PredictionPanel } from "../ui/PredictionPanel";
 import { Banner, OutcomeTag } from "../ui/parts";
+import { Activity } from "../ui/Activity";
+import { contractUrl } from "../config";
 import { currentMarket, formatCountdown, formatUtcStamp, msUntil, nextMarket, phaseAt } from "../domain/market";
 import { directionOf, finalOutcome, type Candle } from "../domain/candle";
-import { formatPct, formatPoints, formatPrice, formatSigned } from "../domain/format";
+import { formatPct, formatPrice, formatSigned } from "../domain/format";
 import { CLOCK_DRIFT_WARN_MS } from "../data/binance";
 
 const PHASE_LABEL = { upcoming: "Upcoming: opens soon", open: "Candle open", closed: "Candle closed" } as const;
@@ -39,10 +41,10 @@ function MarketData({ candles }: { candles: Candle[] }) {
 }
 
 function History({ candles }: { candles: Candle[] }) {
-  const { md, user, mode, account } = useApp();
+  const { md, mode } = useApp();
   const done = candles.filter((c) => finalOutcome(c, md.now)).slice(-7).reverse();
   return (
-    <div className="grid" style={{ alignItems: "start" }}>
+    <div style={{ display: "grid", gap: "var(--s5)" }}>
       <section className="box" aria-labelledby="mh-h">
         <div className="box__h"><h2 id="mh-h">Market history</h2><span className="chip">{mode === "demo" ? "DEMO candles" : "Binance candles"}</span></div>
         {done.length === 0 ? <div className="box__b"><div className="empty">No completed candles to show.</div></div> : <div className="tbl-wrap">
@@ -63,43 +65,13 @@ function History({ candles }: { candles: Candle[] }) {
         </div>}
         <p style={{ padding: "var(--s3) var(--s4)", color: "var(--muted)", fontSize: 13 }}>Market direction from the candle only. It is not a contract settlement and does not say how anyone predicted.</p>
       </section>
-      <section className="box" aria-labelledby="my-h">
-        <div className="box__h"><h2 id="my-h">My activity</h2>{mode === "demo" && <span className="chip chip--demo">DEMO</span>}</div>
-        <div className="box__b">
-          {!account ? (
-            <div className="empty">Connect a wallet to see your predictions and points.</div>
-          ) : user.status === "loading" ? (
-            <div className="skel" style={{ height: 80 }} aria-label="Loading your activity" />
-          ) : user.status === "not-configured" ? (
-            <Banner kind="info" title="Contract not connected">Your points and past predictions come from the contract, so they are unavailable until it is configured. Nothing is estimated.</Banner>
-          ) : user.status === "unavailable" ? (
-            <Banner kind="warn" title="Contract data unavailable" detail={user.reason} />
-          ) : (
-            <>
-              <div><div className="pts num">{user.points}</div><div style={{ color: "var(--muted)", fontSize: 14 }}>{formatPoints(user.points ?? 0)}{mode === "demo" ? " (demo)" : ""}</div></div>
-              {user.history.length === 0 ? <div className="empty">No predictions yet.</div> : (
-                <div className="tbl-wrap">
-                  <table className="tbl">
-                    <caption className="sr">Your past predictions</caption>
-                    <thead><tr><th>UTC day</th><th>You</th><th>Result</th></tr></thead>
-                    <tbody>
-                      {user.history.map((h) => (
-                        <tr key={h.marketId}><td className="num">{h.marketId}</td><td><OutcomeTag o={h.pick} /></td><td>{h.correct === null ? "Pending" : h.correct ? "Correct, +1" : "Incorrect, 0"}</td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </section>
+      <Activity />
     </div>
   );
 }
 
 export function AppPage() {
-  const { md, mode, setMode, refresh, adapter } = useApp();
+  const { md, mode, setMode, refresh, config } = useApp();
   const [view, setView] = useState<"next" | "today">("next");
   const candles = md.snapshot?.candles ?? [];
   const market = view === "next" ? nextMarket(md.now) : currentMarket(md.now);
@@ -142,7 +114,13 @@ export function AppPage() {
       {!err && md.snapshot?.fromCache && <Banner kind="warn" title="Showing cached market data">These prices were saved in this browser from {updated} and are not live. They update as soon as Binance answers.</Banner>}
       {!err && !md.snapshot?.fromCache && md.stale && <Banner kind="warn" title="Market data is stale">The last successful update was at {updated}.</Banner>}
       {Math.abs(md.driftMs) > CLOCK_DRIFT_WARN_MS && mode === "live" && <Banner kind="warn" title="Your clock differs from the exchange">Your device is off by about {Math.round(Math.abs(md.driftMs) / 1000)} s. Market times here use the exchange's clock.</Banner>}
-      {mode === "live" && !adapter.configured && <Banner kind="info" title="Contract integration not configured">Market data is live, but predictions, results and points need the GenLayer contract, which is not connected to this build yet. No contract reads or writes are attempted.</Banner>}
+      {mode === "live" && (
+        <p className="state-line" data-testid="net-info">
+          <span>Network <b>GenLayer Studio (StudioNet)</b></span>
+          <span>Chain ID <b className="num">{config.chainId}</b></span>
+          <span>Contract <a className="num" href={contractUrl(config)} target="_blank" rel="noreferrer">{config.contractAddress.slice(0, 8)}…{config.contractAddress.slice(-6)}</a></span>
+        </p>
+      )}
 
       <div className="grid">
         <section className="box" aria-labelledby="mk-h">

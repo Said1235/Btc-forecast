@@ -199,6 +199,11 @@ export class WalletController {
     }
   }
 
+  /** The EIP-1193 provider the user connected with (not just window.ethereum). */
+  currentProvider(): Eip1193Provider | null {
+    return this.s.providers.find((x) => x.id === this.s.selectedId)?.provider ?? null;
+  }
+
   isWrongNetwork(): boolean {
     return this.s.status === "connected" && this.opts.expectedChainId !== null && this.s.chainId !== this.opts.expectedChainId;
   }

@@ -2,13 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { CLOCK_DRIFT_WARN_MS, fetchDailySnapshot, isStale, LatestOnly, loadCache, MarketDataError, saveCache, type MarketSnapshot } from "../data/binance";
 import { mergeCandles } from "../domain/candle";
 import { createDemoAdapter, DEMO_WALLET, demoCandles } from "../data/demo";
-import { createGenLayerAdapter, readConfig } from "../data/contract/genlayerAdapter";
-import type { ContractAdapter, SubmitOutcome, Verified, UserPrediction } from "../data/contract/adapter";
+import { createGenLayerAdapter } from "../data/contract/genlayerAdapter";
+import type { ChainMarket, ChainPrediction, ContractAdapter, Verified } from "../data/contract/adapter";
+import { addChainParams, readConfig, type GenLayerConfig } from "../config";
+import { DAY_MS, utcDayStart } from "../domain/market";
 import { MemoryStore, TxJournal } from "../tx/journal";
 import { TxTracker } from "../tx/tracker";
-import type { JournalEntry, ReceiptView, SubmitContext, TxProvider } from "../tx/types";
+import type { JournalEntry } from "../tx/types";
 import { WalletController, type WalletState } from "../wallet/controller";
+import { DuplicateSubmissionError } from "../tx/tracker";
 import type { Outcome } from "../domain/candle";
+import { marketWindowFor } from "../domain/market";
 
 export type Mode = "demo" | "live";
 const POLL_MS = 15_000; // incremental refresh of the forming candle (limit=3, weight 2)
@@ -45,14 +49,22 @@ interface Ctx {
   toasts: Toast[];
   toast: (t: string) => void;
   netInfo: { networkId: string; chainId: number; contractAddress: string };
+  config: GenLayerConfig;
+  /** Run one contract write through the journal. Returns an error string instead of throwing. */
+  act: (method: "submit_prediction" | "resolve_market" | "claim_points", openTimeMs: number, pick?: Outcome) => Promise<{ entry?: JournalEntry; error?: string }>;
+}
+
+export interface MarketRow {
+  openTimeMs: number;
+  market: Verified<ChainMarket>;
+  prediction: Verified<ChainPrediction | null>;
 }
 
 export interface UserData {
-  status: "idle" | "loading" | "ok" | "not-configured" | "unavailable";
+  status: "idle" | "loading" | "ok" | "unavailable";
   reason?: string;
-  prediction: Map<string, UserPrediction | null>;
   points: number | null;
-  history: UserPrediction[];
+  rows: Map<number, MarketRow>;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -60,36 +72,6 @@ export const useApp = () => {
   const c = useContext(AppCtx);
   if (!c) throw new Error("useApp outside provider");
   return c;
-};
-
-/** Demo-only transaction provider. IDs look like "demo-0001", never like a real hash. */
-function createDemoTxProvider(adapter: ContractAdapter): TxProvider {
-  const polls = new Map<string, number>();
-  const phases: ReceiptView[] = [{ phase: "processing" }, { phase: "decision" }, { phase: "finalizing" }, { phase: "finalized", executionOk: true, executionResult: "DEMO_OK" }];
-  return {
-    async submit(ctx: SubmitContext) {
-      await new Promise((r) => setTimeout(r, 600));
-      const out: SubmitOutcome = await adapter.submitPrediction({ wallet: ctx.wallet, marketId: ctx.args.marketId, marketOpenTime: ctx.marketOpenTime, pick: ctx.args.pick });
-      if (out.kind === "hash") return out;
-      if (out.kind === "rejected") return { kind: "rejected" as const };
-      throw new Error(out.detail);
-    },
-    async getReceipt(hash) {
-      const n = polls.get(hash) ?? 0;
-      polls.set(hash, n + 1);
-      return phases[Math.min(n, phases.length - 1)];
-    },
-    async readBack(wallet, marketId) {
-      const r = await adapter.readUserPrediction(wallet, marketId);
-      return r.status === "ok" ? (r.value?.pick ?? null) : null;
-    },
-  };
-}
-
-const idleProvider: TxProvider = {
-  async submit() { throw new Error("Contract writes are not enabled."); },
-  async getReceipt() { throw new Error("Contract tracking is not enabled."); },
-  async readBack() { return null; },
 };
 
 function useStore<T>(sub: (l: () => void) => () => void, get: () => T) {
@@ -180,7 +162,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /* ---------- wallet ---------- */
   const config = useMemo(() => readConfig(), []);
-  const walletApi = useMemo(() => new WalletController({ expectedChainId: config?.chainId ?? null, storage: safeStorage() }), [config]);
+  const walletApi = useMemo(() => new WalletController({ expectedChainId: config.chainId, addChainParams: addChainParams(config), storage: safeStorage() }), [config]);
   useEffect(() => {
     walletApi.discover();
     void walletApi.restore(); // silent; never opens a wallet prompt
@@ -190,37 +172,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const account = mode === "demo" ? DEMO_WALLET : wallet.account;
 
   /* ---------- contract adapter + tx ---------- */
-  const adapter = useMemo<ContractAdapter>(() => (mode === "demo" ? createDemoAdapter(demoCandles(bootNow)) : createGenLayerAdapter(config)), [mode, config, bootNow]);
+  const adapter = useMemo<ContractAdapter>(() => (mode === "demo" ? createDemoAdapter(demoCandles(bootNow), bootNow) : createGenLayerAdapter(config)), [mode, config, bootNow]);
   const journal = useMemo(() => new TxJournal(mode === "demo" ? new MemoryStore() : safeStorage() ?? new MemoryStore(), `btc-forecast:tx-journal:v1:${mode}`), [mode]);
-  const tracker = useMemo(() => new TxTracker(journal, mode === "demo" ? createDemoTxProvider(adapter) : idleProvider, { pollMs: mode === "demo" ? 700 : 3000 }), [journal, adapter, mode]);
+  const tracker = useMemo(
+    () => new TxTracker(journal, adapter.txProvider(() => walletApi.currentProvider()), { pollMs: mode === "demo" ? 700 : 3000 }),
+    [journal, adapter, mode, walletApi],
+  );
   useEffect(() => { if (mode === "live") void tracker.resumeAll(); }, [tracker, mode]);
   const entries = useStore(journal.subscribe, journal.snapshot);
-  const netInfo = mode === "demo" ? { networkId: "demo", chainId: 0, contractAddress: "demo" } : { networkId: config?.network ?? "not-configured", chainId: config?.chainId ?? 0, contractAddress: config?.contractAddress ?? "not-configured" };
+  const netInfo = mode === "demo" ? { networkId: "demo", chainId: 0, contractAddress: "demo" } : { networkId: config.network, chainId: config.chainId, contractAddress: config.contractAddress };
 
   /* ---------- user data, scoped to the effective account ---------- */
   const [userState, setUserState] = useState<{ key: string; data: UserData } | null>(null);
   const [userVer, setUserVer] = useState(0);
   const refetchUser = useCallback(() => setUserVer((v) => v + 1), []);
+  useEffect(() => {
+    if (mode !== "live") return;
+    const id = setInterval(() => { if (document.visibilityState === "visible") setUserVer((v) => v + 1); }, 60_000);
+    return () => clearInterval(id);
+  }, [mode]);
   const doneCount = entries.filter((e) => e.state === "finalized-ok").length;
-  const userKey = account ? `${mode}|${account}|${userVer}|${doneCount}` : null;
+  const dayKey = utcDayStart(mdFull.now);
+  const userKey = account ? `${mode}|${account}|${userVer}|${doneCount}|${dayKey}` : null;
   useEffect(() => {
     if (!account || !userKey) return;
     let cancelled = false;
     (async () => {
-      const [pts, hist] = await Promise.all([adapter.readUserPoints(account), adapter.readHistory(account)]);
+      // next market, today, and the last 7 closed markets. Every value comes from a contract view.
+      const times = Array.from({ length: 9 }, (_, i) => dayKey + DAY_MS - i * DAY_MS);
+      const [pts, ...rows] = await Promise.all([adapter.readPoints(account), ...times.map(async (t) => ({ openTimeMs: t, market: await adapter.readMarket(t), prediction: await adapter.readPrediction(account, t) }))]);
       if (cancelled) return;
-      const empty = { prediction: new Map<string, UserPrediction | null>(), points: null, history: [] as UserPrediction[] };
-      if (pts.status !== "ok" || hist.status !== "ok") {
-        const bad = pts.status !== "ok" ? pts : (hist as Verified<never>);
-        setUserState({ key: userKey, data: { ...empty, status: bad.status === "not-configured" ? "not-configured" : "unavailable", reason: bad.status === "unavailable" ? bad.reason : undefined } });
+      const map = new Map(rows.map((r) => [r.openTimeMs, r]));
+      const firstBad = [pts, ...rows.flatMap((r) => [r.market, r.prediction])].find((r) => r.status !== "ok");
+      if (firstBad && firstBad.status === "unavailable") {
+        setUserState({ key: userKey, data: { status: "unavailable", reason: firstBad.reason, points: pts.status === "ok" ? pts.value : null, rows: map } });
         return;
       }
-      setUserState({ key: userKey, data: { ...empty, status: "ok", points: pts.value, history: hist.value } });
+      setUserState({ key: userKey, data: { status: "ok", points: pts.status === "ok" ? pts.value : null, rows: map } });
     })();
     return () => { cancelled = true; };
-  }, [account, adapter, userKey]);
+  }, [account, adapter, userKey, dayKey]);
   // Data for another account, mode or version is never shown: it is treated as still loading.
-  const user: UserData = userState && userState.key === userKey ? userState.data : { status: account ? "loading" : "idle", prediction: new Map(), points: null, history: [] };
+  const user: UserData = userState && userState.key === userKey ? userState.data : { status: account ? "loading" : "idle", points: null, rows: new Map() };
 
   /* ---------- toasts ---------- */
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -230,9 +223,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500);
   }, []);
 
+  const act: Ctx["act"] = async (method, openTimeMs, pick) => {
+    if (!account) return { error: "Connect a wallet first." };
+    const marketId = marketWindowFor(openTimeMs).date;
+    try {
+      const entry = await tracker.submit({ ...netInfo, wallet: account, method, args: { marketId, pick }, marketOpenTime: openTimeMs });
+      return { entry };
+    } catch (e) {
+      if (e instanceof DuplicateSubmissionError) return { error: "This operation is already being tracked. Wait for it to resolve." };
+      return { error: (e as Error).message };
+    }
+  };
+
   const value: Ctx = {
     mode, setMode, theme, cycleTheme, md: mdFull, refresh: () => { void load(true); }, wallet, walletApi, wrongNetwork: walletApi.isWrongNetwork() && mode === "live",
-    account, adapter, tracker, entries, user, refetchUser, toasts, toast, netInfo,
+    account, adapter, tracker, entries, user, refetchUser, toasts, toast, netInfo, config, act,
   };
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }
@@ -247,4 +252,3 @@ function safeStorage() {
   }
 }
 
-export type { Outcome };

@@ -1,9 +1,9 @@
 import { DAY_MS, utcDayStart } from "../domain/market";
-import type { Candle, Outcome } from "../domain/candle";
-import { directionOf } from "../domain/candle";
-import type { ContractAdapter, MarketContractState, SubmitOutcome, UserPrediction, Verified } from "./contract/adapter";
+import { directionOf, type Candle, type Outcome } from "../domain/candle";
+import type { ChainMarket, ChainPrediction, ContractAdapter, Verified } from "./contract/adapter";
+import { CONTRACT_METHODS } from "./contract/adapter";
+import type { ReceiptView, SubmitContext, TxProvider } from "../tx/types";
 
-/** Deterministic PRNG (mulberry32) so the demo fixtures never change between runs. */
 function rng(seed: number) {
   return () => {
     seed |= 0;
@@ -28,51 +28,78 @@ export function demoCandles(now: number, count = 60): Candle[] {
     const hi = Math.max(open, close) * (1 + r() * 0.012);
     const lo = Math.min(open, close) * (1 - r() * 0.012);
     const c = Math.round(close * 100) / 100;
-    out.push({
-      openTime, closeTime: openTime + DAY_MS - 1, open, high: Math.round(hi * 100) / 100, low: Math.round(lo * 100) / 100, close: c,
-      volume: Math.round(9000 + r() * 6000), openRaw: open.toFixed(2), closeRaw: c.toFixed(2),
-    });
+    out.push({ openTime, closeTime: openTime + DAY_MS - 1, open, high: Math.round(hi * 100) / 100, low: Math.round(lo * 100) / 100, close: c, volume: Math.round(9000 + r() * 6000), openRaw: open.toFixed(2), closeRaw: c.toFixed(2) });
     price = c;
   }
   return out;
 }
 
 export const DEMO_WALLET = "0xDEMO000000000000000000000000000000000000";
+const CONFIRM_MS = 6000; // demo shortens the 5 minute confirmation interval
 
-/** In-memory demo adapter. Nothing here is read from or written to a contract. */
-export function createDemoAdapter(candles: Candle[]): ContractAdapter {
-  const picks = new Map<string, Outcome>();
-  const key = (w: string, m: string) => `${w}|${m}`;
+/** In-memory demo of the whole lifecycle. Nothing here is read from or written to a contract. */
+export function createDemoAdapter(candles: Candle[], now0: number): ContractAdapter {
+  const byTime = new Map(candles.map((c) => [c.openTime, c]));
+  const preds = new Map<number, { pick: Outcome; at: number; processed: boolean }>();
+  const results = new Map<number, ChainMarket["result"]>();
+  const cands = new Map<number, ChainMarket["candidate"]>();
+  const today = utcDayStart(now0);
+  const seed: Outcome[] = ["UP", "UP", "DOWN", "FLAT", "DOWN"];
+  // days -6..-2 are settled and claimed; day -1 is waiting for resolution (so every action can be tried)
+  for (let i = 2; i <= 6; i++) {
+    const t = today - i * DAY_MS, c = byTime.get(t);
+    if (!c) continue;
+    preds.set(t, { pick: seed[i - 2], at: t - 3600_000, processed: true });
+    results.set(t, { openPrice: c.openRaw, closePrice: c.closeRaw, outcome: directionOf(c.open, c.close), firstObservedAtMs: t + DAY_MS + 300_000, resolvedAtMs: t + DAY_MS + 700_000 });
+  }
+  preds.set(today - DAY_MS, { pick: "UP", at: today - DAY_MS - 3600_000, processed: false });
   const ok = <T,>(value: T): Verified<T> => ({ status: "ok", value, readAt: Date.now() });
-  const history = (): UserPrediction[] => {
-    const done = candles.slice(-8, -1).reverse();
-    const mine: Outcome[] = ["UP", "UP", "DOWN", "FLAT", "DOWN", "UP", "UP"];
-    return done.map((c, i) => {
-      const date = new Date(c.openTime).toISOString().slice(0, 10);
-      return { marketId: date, wallet: DEMO_WALLET, pick: mine[i], correct: mine[i] === directionOf(c.open, c.close) };
-    });
+  const pointsOf = () => [...preds].filter(([t, p]) => p.processed && results.get(t)?.outcome === p.pick).length;
+
+  const provider: TxProvider = {
+    async submit(ctx: SubmitContext) {
+      await new Promise((r) => setTimeout(r, 500));
+      const t = ctx.marketOpenTime;
+      if (ctx.method === CONTRACT_METHODS.submit && ctx.args.pick) preds.set(t, { pick: ctx.args.pick, at: Date.now(), processed: false });
+      if (ctx.method === CONTRACT_METHODS.resolve) {
+        const c = byTime.get(t);
+        if (c && !results.get(t)) {
+          const ev = { openPrice: c.openRaw, closePrice: c.closeRaw, outcome: directionOf(c.open, c.close) };
+          const prev = cands.get(t);
+          if (prev && Date.now() >= prev.confirmableAtMs) results.set(t, { ...ev, firstObservedAtMs: prev.observedAtMs, resolvedAtMs: Date.now() });
+          else cands.set(t, { ...ev, observedAtMs: Date.now(), confirmableAtMs: Date.now() + CONFIRM_MS });
+        }
+      }
+      if (ctx.method === CONTRACT_METHODS.claim) {
+        const p = preds.get(t);
+        if (p) p.processed = true;
+      }
+      return { kind: "hash" as const, txHash: `demo-${ctx.method.slice(0, 3)}-${String(++n).padStart(4, "0")}` };
+    },
+    async getReceipt(hash): Promise<ReceiptView> {
+      const k = (polls.get(hash) ?? 0) + 1;
+      polls.set(hash, k);
+      const phases: ReceiptView[] = [{ phase: "processing" }, { phase: "decision" }, { phase: "finalizing" }];
+      return phases[k - 1] ?? { phase: "finalized", executionOk: true, executionResult: "DEMO_OK" };
+    },
+    async readBack(e) {
+      const t = e.marketOpenTime;
+      if (e.method === CONTRACT_METHODS.resolve) return { ok: !!(results.get(t) || cands.get(t)), observed: results.get(t) ? "resolved" : cands.get(t) ? "candidate" : "none" };
+      const p = preds.get(t);
+      if (e.method === CONTRACT_METHODS.claim) return { ok: !!p?.processed, observed: p?.processed ? "claimed" : "not claimed" };
+      return { ok: p?.pick === e.args.pick, observed: p?.pick ?? "no prediction" };
+    },
   };
   let n = 0;
+  const polls = new Map<string, number>();
   return {
     mode: "demo",
-    configured: true,
-    async readMarket(marketId): Promise<Verified<MarketContractState>> {
-      return ok({ marketId, predictionsOpen: true, resolved: false, result: null, final: false });
+    async readMarket(t) { return ok<ChainMarket>({ openTimeMs: t, candidate: cands.get(t) ?? null, result: results.get(t) ?? null }); },
+    async readPrediction(_w, t) {
+      const p = preds.get(t);
+      return ok<ChainPrediction | null>(p ? { pick: p.pick, submittedAtMs: p.at, processed: p.processed } : null);
     },
-    async readUserPrediction(wallet, marketId) {
-      const pick = picks.get(key(wallet, marketId));
-      return ok(pick ? { marketId, wallet, pick, correct: null } : null);
-    },
-    async readUserPoints() {
-      return ok(history().filter((h) => h.correct).length);
-    },
-    async readHistory() {
-      return ok(history());
-    },
-    async submitPrediction(req): Promise<SubmitOutcome> {
-      picks.set(key(req.wallet, req.marketId), req.pick);
-      n += 1;
-      return { kind: "hash", txHash: `demo-${String(n).padStart(4, "0")}` };
-    },
+    async readPoints() { return ok(pointsOf()); },
+    txProvider: () => provider,
   };
 }

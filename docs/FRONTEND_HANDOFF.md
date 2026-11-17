@@ -1,4 +1,4 @@
-# BTC Forecast: frontend handoff
+# BTC Forecast: frontend handoff (contract connected)
 
 Standalone frontend (Vite 8 + React 19 + TypeScript 6). The contract repo did not exist when this was built, so this is a new `btc-forecast-app` folder that touches no contract or backend code. Move it into the real repo's frontend folder when ready.
 
@@ -18,13 +18,15 @@ npm run lint && npm test
 - **Transaction journal** (`src/tx`): entries keyed by exact `txHash`, original wallet/market/args kept, in-flight guard per wallet+market+method, resume by hash, read-back with the original wallet, no "latest record" or wallet-diff logic anywhere.
 - **Demo Mode**: `src/data/demo.ts` (seeded fixtures, ids like `demo-0001`). Always labelled DEMO; never auto-selected after a live failure.
 
-## Integration boundary
-`src/data/contract/adapter.ts` defines `ContractAdapter` (read market, user prediction, points, history, submit). These are UI concepts, not contract method names.
-`src/data/contract/genlayerAdapter.ts` is inert: with no config it returns `not-configured`; with config it returns `unavailable` until the schema is mapped. Writes throw.
-
-## Needed from the project owner
-1. Deployed contract address, network name, chain ID, RPC URL (set `VITE_GENLAYER_*`, `VITE_CONTRACT_ADDRESS`; see `.env.example`).
-2. Then inspect source/schema (`client.getContractSchema(address)`) and confirm: view methods, write methods, arg order/types, returns, whether predictions are editable before open, how results/points are exposed (and provisional vs final).
+## Contract integration (StudioNet)
+- Network StudioNet, chain ID 61999, RPC `https://studio.genlayer.com/api`, contract `0x8AB7b7FB6771cb91d65623964df704c075e7e2b7` (`src/config.ts`; overridable with `VITE_*`). Chain ID and RPC match genlayer-js 1.1.8 `studionet`.
+- The contract source in `Said1235/BTC-Forest-Intelligent-Contract` was compared with the file supplied in chat: identical. The mapping below comes from that source.
+- Writes (all via `writeContract`, value 0, tracked by exact hash): `submit_prediction(market_open_time_ms:int, prediction:"UP"|"DOWN"|"FLAT")`, `resolve_market(ms)`, `claim_points(ms)`.
+- Views: `get_prediction(ms, Address)`, `get_market_candidate(ms)`, `get_market_result(ms)`, `get_user_points(Address)`. Address arguments are sent as `CalldataAddress` (a plain string would be encoded as `str`).
+- Rules reflected in the UI: a prediction can be changed until the market's 00:00 UTC start and must be within 7 days; resolution is two permissionless steps (candidate after 5 min grace, confirmation 5 min later, both need >= 1 prediction); points exist only after `claim_points`. Provisional candidate and final result are shown separately.
+- No history view exists, so "My activity" reads the last 7 closed markets one by one.
+- Before sending `submit_prediction`/`claim_points`, `simulateWriteContract` is run; an `[EXPECTED]` refusal stops the call before the wallet prompt. `resolve_market` is not simulated (it does a web fetch).
+- The contract fetches Binance from `data-api.binance.vision`; the chart uses `api.binance.com`. Same market data, different host.
 
 ## genlayer-js findings (installed 1.1.8, read from its type definitions and the official boilerplate)
 - `createClient({ chain, endpoint?, account?, provider? })`; chains in `genlayer-js/chains`: `studionet`, `localnet`, `testnetAsimov`, `testnetBradbury`. `studionet` id is 61999.
@@ -34,11 +36,11 @@ npm run lint && npm test
 - The boilerplate frontend (Next.js + wagmi) uses `createClient({chain: studionet, account})`; PM Kit is Next.js + Privy/wagmi with betting/bridge, none of which was used.
 - Not verified here: the docs pages for networks/writing-data were not reachable (allowlist), so network values beyond the SDK's own definitions are unconfirmed.
 
-## Tests actually run (see final report for results)
-Domain, market-data, wallet, presentation, 10 transaction-journal regression scenarios and UI flows. Real-browser screenshots at 1440, 1024, 768, 390, 320; live rendering checked with mocked Binance responses (the build environment cannot reach Binance).
+## Tests
+`npm test` (96 tests: domain, Binance, wallet, adapter with a fake SDK, 10 journal regression scenarios, UI flows). Live checks, run on a machine with internet: `npm run test:live` (Binance) and `npm run test:studio` (Studio RPC, chain id, contract schema, public reads).
 
 ## Known limitations
-- No real contract reads/writes/tx tracking yet (by design). `isSuccessful`-style check and read-back mapping need the real schema.
+- Contract calls were NOT executed against StudioNet from the build environment (RPC blocked). The adapter is tested with a fake SDK; run `npm run test:studio` and one real prediction to confirm.
 - Real Binance was not reachable from the build sandbox; the live path is tested with mocked responses.
 - No real wallet (MetaMask) was used; wallet logic is tested with fake EIP-1193 providers.
 - No Playwright e2e suite committed; UI tests use jsdom with the chart mocked.
