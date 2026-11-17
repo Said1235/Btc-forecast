@@ -10,7 +10,7 @@ import { UNRESOLVED } from "../tx/types";
 const hhmmss = (ms: number) => new Date(ms).toISOString().slice(11, 19) + " UTC";
 
 export function Activity() {
-  const { user, account, mode, md, entries, act, refetchUser, wrongNetwork, tracker, toast } = useApp();
+  const { user, account, mode, md, entries, act, refetchUser, wrongNetwork, toast } = useApp();
   const [err, setErr] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const today = utcDayStart(md.now);
@@ -92,7 +92,7 @@ export function Activity() {
               );
             })()}
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Resolution is two steps by anyone: a provisional observation, then a confirmation at least 5 minutes later. Only a confirmed result is final and can be claimed. The contract may still refuse a step (for example if the data differs); its answer is shown.</p>
-            {mine.map((e) => <TxPanel key={e.opId} entry={e} onResume={() => void tracker.track(e.opId)} />)}
+            {mine.map((e) => <TxPanel key={e.opId} entry={e} />)}
             <p style={{ color: "var(--muted)", fontSize: 12 }}>Latest read {user.status === "ok" ? "succeeded" : "had errors"} · markets shown: {formatUtcStamp(today - DAY_MS).slice(0, 10)} and earlier</p>
           </>
         )}

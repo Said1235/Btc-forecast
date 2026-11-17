@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { RpcGate } from "../../rpc/gate";
 import { createGenLayerAdapter, parseCandidate, parseMarketResult, parsePrediction, failureDetail, type SdkClient, type SdkFactory } from "./genlayerAdapter";
 import { readConfig, STUDIO_DEFAULTS, addChainParams } from "../../config";
 import { TxJournal, MemoryStore } from "../../tx/journal";
@@ -16,6 +17,7 @@ function fake(over: Partial<SdkClient> = {}) {
     simulateWriteContract: vi.fn(async () => null),
     writeContract: vi.fn(async () => HASH),
     getTransaction: vi.fn(async () => ({ statusName: "PENDING" })),
+    chain: { id: 61999, rpcUrls: { default: { http: ["https://studio.genlayer.com/api"] } } },
     ...over,
   } as unknown as SdkClient & { readContract: ReturnType<typeof vi.fn>; simulateWriteContract: ReturnType<typeof vi.fn>; writeContract: ReturnType<typeof vi.fn>; getTransaction: ReturnType<typeof vi.fn> };
   const addr = vi.fn(async (h: string) => ({ __address: h }));
@@ -23,6 +25,8 @@ function fake(over: Partial<SdkClient> = {}) {
   const factory: SdkFactory = { readClient: async () => client, writeClient, address: addr };
   return { client, factory, addr, writeClient };
 }
+export const mkGate = () => new RpcGate({ minGapMs: 0, sleep: async () => {}, random: () => 0.5 });
+const walletProv = (over: Record<string, unknown> = {}) => ({ request: vi.fn(async ({ method }: { method: string }) => (method in over ? over[method] : method === "eth_chainId" ? "0xf22f" : method === "eth_getTransactionCount" ? "0x5" : null)) });
 const ctx = (method: string, pick?: "UP"): SubmitContext => ({ networkId: "studionet", chainId: 61999, contractAddress: cfg.contractAddress, wallet: W, method, args: { marketId: "2026-11-18", pick }, marketOpenTime: T });
 
 describe("configuration", () => {
@@ -62,7 +66,7 @@ describe("reads", () => {
   it("calls the real view names with integer ms and an Address calldata value", async () => {
     const f = fake();
     f.client.readContract.mockImplementation(async (a: { functionName: string }) => (a.functionName === "get_prediction" ? { exists: true, prediction: "UP", submitted_at_ms: 9, processed: false } : 7));
-    const ad = createGenLayerAdapter(cfg, f.factory);
+    const ad = createGenLayerAdapter(cfg, f.factory, mkGate());
     const p = await ad.readPrediction(W, T);
     expect(p).toMatchObject({ status: "ok", value: { pick: "UP" } });
     expect(f.client.readContract).toHaveBeenCalledWith({ address: cfg.contractAddress, functionName: "get_prediction", args: [T, { __address: W }] });
@@ -72,21 +76,21 @@ describe("reads", () => {
   it("reads both market views", async () => {
     const f = fake();
     f.client.readContract.mockImplementation(async (a: { functionName: string }) => (a.functionName === "get_market_result" ? { resolved: false } : { exists: false }));
-    const m = await createGenLayerAdapter(cfg, f.factory).readMarket(T);
+    const m = await createGenLayerAdapter(cfg, f.factory, mkGate()).readMarket(T);
     expect(m).toMatchObject({ status: "ok", value: { openTimeMs: T, result: null, candidate: null } });
     expect((f.client.readContract.mock.calls as [{ functionName: string }][]).map((c) => c[0].functionName).sort()).toEqual(["get_market_candidate", "get_market_result"]);
   });
   it("reports RPC failures and schema mismatches instead of inventing data", async () => {
     const f = fake({ readContract: vi.fn(async () => { throw new Error("RPC down"); }) });
-    expect(await createGenLayerAdapter(cfg, f.factory).readPoints(W)).toEqual({ status: "unavailable", reason: "RPC down" });
+    expect(await createGenLayerAdapter(cfg, f.factory, mkGate()).readPoints(W)).toEqual({ status: "unavailable", reason: "RPC down" });
     const g = fake({ readContract: vi.fn(async () => ({ weird: true })) });
-    const r = await createGenLayerAdapter(cfg, g.factory).readPrediction(W, T);
+    const r = await createGenLayerAdapter(cfg, g.factory, mkGate()).readPrediction(W, T);
     expect(r).toMatchObject({ status: "unavailable" });
     expect((r as { reason: string }).reason).toMatch(/schema mismatch/);
   });
   it("refuses a malformed wallet address before any call", async () => {
     const f = fake();
-    expect(await createGenLayerAdapter(cfg, f.factory).readPoints("0xabc")).toMatchObject({ status: "unavailable" });
+    expect(await createGenLayerAdapter(cfg, f.factory, mkGate()).readPoints("0xabc")).toMatchObject({ status: "unavailable" });
     expect(f.client.readContract).not.toHaveBeenCalled();
   });
 });
@@ -94,9 +98,9 @@ describe("reads", () => {
 describe("writes", () => {
   it("sends the exact arguments for each method with value 0", async () => {
     const f = fake();
-    const tp = createGenLayerAdapter(cfg, f.factory).txProvider(() => "PROVIDER");
+    const tp = createGenLayerAdapter(cfg, f.factory, mkGate()).txProvider(() => walletProv());
     expect(await tp.submit(ctx("submit_prediction", "UP"))).toEqual({ kind: "hash", txHash: HASH });
-    expect(f.writeClient).toHaveBeenCalledWith(W, "PROVIDER");
+    expect(f.writeClient).toHaveBeenCalledWith(W, expect.objectContaining({ request: expect.any(Function) }));
     expect(f.client.writeContract).toHaveBeenLastCalledWith({ address: cfg.contractAddress, functionName: "submit_prediction", args: [T, "UP"], value: 0n });
     await tp.submit(ctx("claim_points"));
     expect(f.client.writeContract).toHaveBeenLastCalledWith({ address: cfg.contractAddress, functionName: "claim_points", args: [T], value: 0n });
@@ -107,7 +111,7 @@ describe("writes", () => {
   it("stops before the wallet when the contract refuses, and the tracker records nothing as sent", async () => {
     const f = fake({ simulateWriteContract: vi.fn(async () => { throw new Error("[EXPECTED] market locked"); }) });
     const j = new TxJournal(new MemoryStore());
-    const tr = new TxTracker(j, createGenLayerAdapter(cfg, f.factory).txProvider(() => null), { sleep: async () => {} });
+    const tr = new TxTracker(j, createGenLayerAdapter(cfg, f.factory, mkGate()).txProvider(() => walletProv()), { sleep: async () => {} });
     const e = await tr.submit(ctx("submit_prediction", "UP"));
     expect(e.state).toBe("rejected");
     expect(e.lastError).toMatch(/market locked/);
@@ -116,17 +120,17 @@ describe("writes", () => {
   });
   it("continues when the simulation fails for an unknown reason", async () => {
     const f = fake({ simulateWriteContract: vi.fn(async () => { throw new Error("gen_call unsupported"); }) });
-    expect(await createGenLayerAdapter(cfg, f.factory).txProvider(() => null).submit(ctx("claim_points"))).toMatchObject({ kind: "hash" });
+    expect(await createGenLayerAdapter(cfg, f.factory, mkGate()).txProvider(() => walletProv()).submit(ctx("claim_points"))).toMatchObject({ kind: "hash" });
   });
   it("maps wallet rejection and refuses a result that is not a hash", async () => {
     const rej = fake({ writeContract: vi.fn(async () => { throw Object.assign(new Error("User rejected the request."), { code: 4001 }); }) });
-    expect(await createGenLayerAdapter(cfg, rej.factory).txProvider(() => null).submit(ctx("claim_points"))).toEqual({ kind: "rejected" });
+    expect(await createGenLayerAdapter(cfg, rej.factory, mkGate()).txProvider(() => walletProv()).submit(ctx("claim_points"))).toEqual({ kind: "rejected" });
     const nohash = fake({ writeContract: vi.fn(async () => undefined) });
-    await expect(createGenLayerAdapter(cfg, nohash.factory).txProvider(() => null).submit(ctx("claim_points"))).rejects.toThrow(/did not return a transaction hash/);
+    await expect(createGenLayerAdapter(cfg, nohash.factory, mkGate()).txProvider(() => walletProv()).submit(ctx("claim_points"))).rejects.toThrow(/did not return a transaction hash/);
   });
   it("refuses a context for another contract or chain", async () => {
     const f = fake();
-    const tp = createGenLayerAdapter(cfg, f.factory).txProvider(() => null);
+    const tp = createGenLayerAdapter(cfg, f.factory, mkGate()).txProvider(() => walletProv());
     await expect(tp.submit({ ...ctx("claim_points"), contractAddress: "0x" + "22".repeat(20) })).rejects.toThrow(/does not match/);
     await expect(tp.submit({ ...ctx("claim_points"), chainId: 1 })).rejects.toThrow(/does not match/);
     expect(f.client.writeContract).not.toHaveBeenCalled();
@@ -134,7 +138,7 @@ describe("writes", () => {
 });
 
 describe("receipts and read-back", () => {
-  const tpFor = (tx: Record<string, unknown>) => createGenLayerAdapter(cfg, fake({ getTransaction: vi.fn(async () => tx) }).factory).txProvider(() => null);
+  const tpFor = (tx: Record<string, unknown>) => createGenLayerAdapter(cfg, fake({ getTransaction: vi.fn(async () => tx) }).factory, mkGate()).txProvider(() => walletProv());
   it("maps SDK statuses", async () => {
     expect(await tpFor({ statusName: "PENDING" }).getReceipt(HASH)).toEqual({ phase: "processing" });
     expect(await tpFor({ statusName: "ACCEPTED" }).getReceipt(HASH)).toEqual({ phase: "decision" });
@@ -159,7 +163,7 @@ describe("receipts and read-back", () => {
       if (a.functionName === "get_market_result") return { resolved: false };
       return { exists: true, open_price: "1", close_price: "2", outcome: "UP", observed_at_ms: 1, confirmable_at_ms: 2 };
     });
-    const tp = createGenLayerAdapter(cfg, f.factory).txProvider(() => null);
+    const tp = createGenLayerAdapter(cfg, f.factory, mkGate()).txProvider(() => walletProv());
     const entry = (method: string, pick?: "UP" | "DOWN"): JournalEntry => ({ opId: "o", txHash: HASH, networkId: "studionet", chainId: 61999, contractAddress: cfg.contractAddress, wallet: W, method, args: { marketId: "2026-11-18", pick }, marketOpenTime: T, submittedAt: 0, updatedAt: 0, state: "finalizing", executionResult: null, lastError: null });
     expect(await tp.readBack(entry("submit_prediction", "UP"))).toEqual({ ok: true, observed: "UP" });
     expect(await tp.readBack(entry("submit_prediction", "DOWN"))).toEqual({ ok: false, observed: "UP" });

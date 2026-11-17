@@ -13,15 +13,17 @@ export type TxState =
   | "rejected"
   | "tracking-unavailable"
   | "unknown-reconcile"
-  | "readback-mismatch";
+  | "readback-mismatch"
+  | "rate-limited" // the RPC limited us BEFORE anything was sent: provably nothing exists
+  | "send-rate-limited"; // the RPC limited the send itself: acceptance is not proven
 
 /** States that still need attention: a second submission for the same key is blocked. */
 export const UNRESOLVED: ReadonlySet<TxState> = new Set<TxState>([
   "awaiting-approval", "submitting", "submitted", "processing", "decision", "finalizing",
-  "tracking-unavailable", "unknown-reconcile", "readback-mismatch",
+  "tracking-unavailable", "unknown-reconcile", "readback-mismatch", "send-rate-limited",
 ]);
 
-export const TERMINAL: ReadonlySet<TxState> = new Set<TxState>(["finalized-ok", "finalized-error", "undetermined", "rejected"]);
+export const TERMINAL: ReadonlySet<TxState> = new Set<TxState>(["finalized-ok", "finalized-error", "undetermined", "rejected", "rate-limited"]);
 
 export interface JournalArgs {
   marketId: string; // UTC date, YYYY-MM-DD
@@ -43,6 +45,10 @@ export interface JournalEntry {
   state: TxState;
   executionResult: string | null;
   lastError: string | null;
+  /** epoch ms before which no new signature request / reconcile is made (rate-limit cool-down) */
+  retryAt?: number | null;
+  /** account nonce (pending) read right before signing; evidence for reconcile */
+  nonceAtSend?: number | null;
 }
 
 export interface SubmitContext {
@@ -53,7 +59,11 @@ export interface SubmitContext {
   method: string;
   args: JournalArgs;
   marketOpenTime: number;
+  /** called once the network was verified and the pre-send nonce read, before the wallet is asked to sign */
+  onPrepared?: (info: { nonce: number | null }) => void;
 }
+
+export type Verdict = "applied" | "pending" | "not-found" | "unknown";
 
 export type ReceiptView =
   | { phase: "processing" | "decision" | "finalizing" }
@@ -66,4 +76,6 @@ export interface TxProvider {
   getReceipt(txHash: string): Promise<ReceiptView>;
   /** authoritative read-back using the entry's ORIGINAL wallet, method and exact market */
   readBack(entry: JournalEntry): Promise<{ ok: boolean; observed: string }>;
+  /** evidence about an operation that never returned a hash. Never sends anything. */
+  reconcile(entry: JournalEntry): Promise<{ verdict: Verdict; detail: string }>;
 }

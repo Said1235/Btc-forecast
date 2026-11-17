@@ -22,13 +22,28 @@ export const TX_COPY: Record<TxState, { label: string; tone: "wait" | "ok" | "ba
   "tracking-unavailable": { label: "Tracking temporarily unavailable", tone: "wait" },
   "unknown-reconcile": { label: "Unknown outcome: needs reconciliation", tone: "bad" },
   "readback-mismatch": { label: "Read-back does not match what was submitted", tone: "bad" },
+  "rate-limited": { label: "RPC temporarily saturated. Nothing was sent", tone: "wait" },
+  "send-rate-limited": { label: "Submission without a confirmed id: the RPC limited the send", tone: "bad" },
 };
 const STAGES: TxState[][] = [["awaiting-approval", "submitting"], ["submitted"], ["processing", "decision"], ["finalizing"], ["finalized-ok", "finalized-error", "readback-mismatch"]];
 
 const OP_LABEL: Record<string, string> = { submit_prediction: "Prediction", resolve_market: "Resolution", claim_points: "Claim" };
 
-export function TxPanel({ entry, onResume }: { entry: JournalEntry; onResume: () => void }) {
+export function TxPanel({ entry }: { entry: JournalEntry }) {
+  const { tracker, md, toast } = useApp();
+  const [checking, setChecking] = useState(false);
   const c = TX_COPY[entry.state];
+  const waitS = Math.max(0, Math.ceil(((entry.retryAt ?? 0) - md.now) / 1000));
+  const noHash = !entry.txHash && (entry.state === "unknown-reconcile" || entry.state === "send-rate-limited");
+  const check = async () => {
+    setChecking(true);
+    try {
+      const r = await tracker.reconcile(entry.opId);
+      toast(r.verdict === "applied" || r.verdict === "not-found" ? r.detail : `Still uncertain. ${r.detail}`);
+    } finally {
+      setChecking(false);
+    }
+  };
   const stage = STAGES.findIndex((s) => s.includes(entry.state));
   const demo = entry.networkId === "demo";
   return (
@@ -42,7 +57,14 @@ export function TxPanel({ entry, onResume }: { entry: JournalEntry; onResume: ()
       </dl>
       {demo && <p style={{ color: "var(--muted)" }}>Simulated lifecycle. No transaction was sent and nothing was written to a contract.</p>}
       {entry.lastError && <p role="status" style={{ color: c.tone === "bad" ? "var(--err)" : "var(--warn)" }}>{entry.lastError}</p>}
-      {(entry.state === "tracking-unavailable") && <div><button className="btn btn--sm" onClick={onResume}>Resume tracking this transaction</button></div>}
+      {entry.state === "rate-limited" && waitS > 0 && <p role="status">You can try again in about {waitS}s. Your wallet will not be asked to sign before then.</p>}
+      {entry.state === "tracking-unavailable" && entry.txHash && <div><button className="btn btn--sm" onClick={() => void tracker.track(entry.opId)}>Resume tracking this transaction</button></div>}
+      {noHash && (
+        <div className="row-actions">
+          <button className="btn btn--sm" disabled={checking || waitS > 0} onClick={() => void check()}>{waitS > 0 ? `Check available in ${waitS}s` : checking ? "Checking…" : "Check before retrying"}</button>
+          <button className="btn btn--sm" disabled={checking} onClick={() => tracker.markNotSent(entry.opId)} title="Only after you checked the account in the explorer">I checked: it was not sent</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -134,7 +156,7 @@ export function PredictionPanel({ market, isNext }: { market: MarketWindow; isNe
           <dt>Opens</dt><dd className="num">{formatUtcStamp(market.openTime)}</dd>
           <dt>Points</dt><dd>1 point if correct, 0 if not. No stakes.</dd>
         </dl>
-        {latest && <TxPanel entry={latest} onResume={() => void act("submit_prediction", market.openTime).then(() => undefined)} />}
+        {latest && <TxPanel entry={latest} />}
       </div>
       {confirm && pick && (
         <Dialog title={onchain ? "Confirm your change" : "Confirm your prediction"} labelId="cf-h" onClose={() => !busy && setConfirm(false)}>

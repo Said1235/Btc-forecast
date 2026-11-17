@@ -175,7 +175,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const adapter = useMemo<ContractAdapter>(() => (mode === "demo" ? createDemoAdapter(demoCandles(bootNow), bootNow) : createGenLayerAdapter(config)), [mode, config, bootNow]);
   const journal = useMemo(() => new TxJournal(mode === "demo" ? new MemoryStore() : safeStorage() ?? new MemoryStore(), `btc-forecast:tx-journal:v1:${mode}`), [mode]);
   const tracker = useMemo(
-    () => new TxTracker(journal, adapter.txProvider(() => walletApi.currentProvider()), { pollMs: mode === "demo" ? 700 : 3000 }),
+    () => new TxTracker(journal, adapter.txProvider(() => walletApi.currentProvider()), { pollMs: mode === "demo" ? 700 : 5000 }),
     [journal, adapter, mode, walletApi],
   );
   useEffect(() => { if (mode === "live") void tracker.resumeAll(); }, [tracker, mode]);
@@ -188,7 +188,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refetchUser = useCallback(() => setUserVer((v) => v + 1), []);
   useEffect(() => {
     if (mode !== "live") return;
-    const id = setInterval(() => { if (document.visibilityState === "visible") setUserVer((v) => v + 1); }, 60_000);
+    const id = setInterval(() => { if (document.visibilityState === "visible") setUserVer((v) => v + 1); }, 120_000);
     return () => clearInterval(id);
   }, [mode]);
   const doneCount = entries.filter((e) => e.state === "finalized-ok").length;
@@ -200,10 +200,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (async () => {
       // next market, today, and the last 7 closed markets. Every value comes from a contract view.
       const times = Array.from({ length: 9 }, (_, i) => dayKey + DAY_MS - i * DAY_MS);
-      const [pts, ...rows] = await Promise.all([adapter.readPoints(account), ...times.map(async (t) => ({ openTimeMs: t, market: await adapter.readMarket(t), prediction: await adapter.readPrediction(account, t) }))]);
+      // Predictions first (1 call each). Market views only where they are needed: the two markets on screen
+      // and any market the user predicted. Everything goes through the shared RPC gate (cache + dedupe + pacing).
+      const [pts, ...preds] = await Promise.all([adapter.readPoints(account), ...times.map((t) => adapter.readPrediction(account, t))]);
+      const needed = times.filter((_t, i) => i < 2 || (preds[i].status === "ok" && preds[i].value));
+      const markets = new Map(await Promise.all(needed.map(async (t) => [t, await adapter.readMarket(t)] as const)));
+      const skipped: Verified<ChainMarket> = { status: "unavailable", reason: "not requested" };
+      const rows = times.map((t, i) => ({ openTimeMs: t, market: markets.get(t) ?? skipped, prediction: preds[i] }));
       if (cancelled) return;
       const map = new Map(rows.map((r) => [r.openTimeMs, r]));
-      const firstBad = [pts, ...rows.flatMap((r) => [r.market, r.prediction])].find((r) => r.status !== "ok");
+      const firstBad = [pts, ...rows.flatMap((r) => [markets.has(r.openTimeMs) ? r.market : null, r.prediction])].find((r) => r && r.status !== "ok");
       if (firstBad && firstBad.status === "unavailable") {
         setUserState({ key: userKey, data: { status: "unavailable", reason: firstBad.reason, points: pts.status === "ok" ? pts.value : null, rows: map } });
         return;

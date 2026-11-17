@@ -31,6 +31,10 @@ class MockProvider implements TxProvider {
     if (step instanceof Error) throw step;
     return typeof step === "function" ? step() : step;
   }
+  reconcileResult: { verdict: import("./types").Verdict; detail: string } = { verdict: "unknown", detail: "no evidence" };
+  async reconcile() {
+    return this.reconcileResult;
+  }
   async readBack(entry: import("./types").JournalEntry) {
     const got = this.onChain.get(`${entry.wallet}|${entry.args.marketId}`) ?? null;
     return { ok: got === entry.args.pick, observed: got ?? "no prediction" };

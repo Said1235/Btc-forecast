@@ -45,3 +45,11 @@ npm run lint && npm test
 - No real wallet (MetaMask) was used; wallet logic is tested with fake EIP-1193 providers.
 - No Playwright e2e suite committed; UI tests use jsdom with the chart mocked.
 - Landing hero is an illustration of the rule, not a screenshot of the app.
+
+## StudioNet RPC rate limiting (fix)
+
+- Cause (probable, measured on our side): the page issued 28 `gen_call` reads on load and again every 60 s (56 in 70 s), uncached and unpaced, plus a 3 s receipt poll and a fresh write client per send. That traffic shares the Studio RPC limit with the wallet's own `eth_sendRawTransaction` to its configured 0xf22f RPC. After the fix: 14 reads on load, 14 in 70 s. The wallet-side error itself cannot be reproduced from the sandbox.
+- `src/rpc/gate.ts`: reads are deduplicated, cached (TTL), paced, paused on rate limit (backoff + jitter + Retry-After, max 3 retries); writes are serialized per account+chain and enter a cool-down after a limit, enforced before the wallet is asked to sign.
+- `verifyStudioNetwork` (adapter): before every write checks wallet `eth_chainId` = 0xf22f, both clients' `chain.id` = 61999 and effective RPC = `https://studio.genlayer.com/api`, and that read and write clients agree.
+- States: `rate-limited` (nothing sent, provable) and `send-rate-limited` (the send was limited; acceptance not proven, never resent automatically). Recovery: "Check before retrying" reads nonce (latest/pending vs nonce recorded before signing) and contract state; only sufficient evidence reopens the send. "I checked: it was not sent" is a manual user decision.
+- Known limit: genlayer-js 1.1.8 `writeContract` makes its own nonce/gas/receipt RPC calls internally (no retry, `retryCount: 0`); they cannot be routed through the gate.

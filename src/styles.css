@@ -221,3 +221,4 @@ button { font: inherit; color: inherit; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 .rise { animation: rise .35s ease-out both; }
+.row-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }

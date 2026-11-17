@@ -1,5 +1,6 @@
 import { TxJournal } from "./journal";
-import type { JournalEntry, ReceiptView, SubmitContext, TxProvider, TxState } from "./types";
+import { isRateLimitError, RateLimitedError } from "../rpc/gate";
+import { UNRESOLVED, type JournalEntry, type ReceiptView, type SubmitContext, type TxProvider, type TxState, type Verdict } from "./types";
 
 export class DuplicateSubmissionError extends Error {
   constructor(public existing: JournalEntry) {
@@ -45,7 +46,7 @@ export class TxTracker {
   private newId: () => string;
   constructor(public journal: TxJournal, private provider: TxProvider, opts: TrackerOptions = {}) {
     this.sleep = opts.sleep ?? defaultSleep;
-    this.pollMs = opts.pollMs ?? 3000;
+    this.pollMs = opts.pollMs ?? 5000;
     this.maxPolls = opts.maxPolls ?? 200;
     this.now = opts.now ?? Date.now;
     this.newId = opts.newId ?? defaultId;
@@ -76,7 +77,7 @@ export class TxTracker {
       submittedAt: t, updatedAt: t, state: "awaiting-approval", executionResult: null, lastError: null,
     });
     try {
-      const out = await this.provider.submit(ctx);
+      const out = await this.provider.submit({ ...ctx, onPrepared: ({ nonce }) => this.journal.patchByOp(opId, { nonceAtSend: nonce }) });
       if (out.kind === "rejected") {
         this.journal.setState(opId, "rejected", { lastError: "The wallet request was rejected. No transaction was submitted." });
         return this.journal.getByOp(opId)!;
@@ -84,17 +85,71 @@ export class TxTracker {
       this.journal.bindHash(opId, out.txHash);
       this.journal.setState(opId, "submitted");
     } catch (e) {
-      if ((e as Error).name === "ContractRefusal") {
-        this.journal.setState(opId, "rejected", { lastError: `The contract refused this call before it was sent: ${(e as Error).message}. No transaction was submitted.` });
+      const err = e as Error & { provablyNotSent?: boolean };
+      if (err.name === "ContractRefusal") {
+        this.journal.setState(opId, "rejected", { lastError: `The contract refused this call before it was sent: ${err.message}. No transaction was submitted.` });
+        return this.journal.getByOp(opId)!;
+      }
+      if (err.name === "PreSendError") {
+        this.journal.setState(opId, "rejected", { lastError: `Nothing was sent: ${err.message}` });
+        return this.journal.getByOp(opId)!;
+      }
+      if (err instanceof RateLimitedError || isRateLimitError(err)) {
+        const wait = err instanceof RateLimitedError ? err.retryAfterMs : 15_000;
+        const retryAt = this.now() + wait;
+        const secs = Math.ceil(wait / 1000);
+        if (err.provablyNotSent) {
+          this.journal.setState(opId, "rate-limited", { retryAt, lastError: `The StudioNet RPC is temporarily limiting requests. Nothing was sent and your wallet was not asked to sign. Try again in about ${secs}s.` });
+        } else {
+          this.journal.setState(opId, "send-rate-limited", { retryAt, lastError: `The StudioNet RPC limited the send (${err.message}). It is not proven that nothing was accepted, so nothing is resent automatically. Run the check in about ${secs}s.` });
+        }
         return this.journal.getByOp(opId)!;
       }
       this.journal.setState(opId, "unknown-reconcile", {
-        lastError: `Submission ended without a transaction hash (${(e as Error).message}). Check before submitting again.`,
+        lastError: `Submission ended without a transaction hash (${err.message}). Check before submitting again.`,
       });
       return this.journal.getByOp(opId)!;
     }
     await this.track(opId);
     return this.journal.getByOp(opId)!;
+  }
+
+  /**
+   * Evidence-based check for an operation that has no hash. It only READS; it never sends.
+   * Resolves to a safe state only when the evidence is sufficient, otherwise the operation stays uncertain.
+   */
+  async reconcile(opId: string): Promise<{ verdict: Verdict; detail: string }> {
+    const e = this.journal.getByOp(opId);
+    if (!e || e.txHash || !["unknown-reconcile", "send-rate-limited"].includes(e.state)) return { verdict: "unknown", detail: "Nothing to check for this operation." };
+    const wait = (e.retryAt ?? 0) - this.now();
+    if (wait > 0) return { verdict: "unknown", detail: `Wait about ${Math.ceil(wait / 1000)}s before checking, so the RPC can recover.` };
+    const others = this.journal.all().filter((x) => x.opId !== opId && x.wallet.toLowerCase() === e.wallet.toLowerCase() && UNRESOLVED.has(x.state));
+    if (others.length) return this.keep(opId, { verdict: "unknown", detail: "Another operation from this account is still unresolved, so the account nonce cannot be attributed to this one. Resolve that one first." });
+    let r: { verdict: Verdict; detail: string };
+    try {
+      r = await this.provider.reconcile(e);
+    } catch (err) {
+      const rl = err instanceof RateLimitedError || isRateLimitError(err);
+      const retryAt = rl ? this.now() + (err instanceof RateLimitedError ? err.retryAfterMs : 15_000) : e.retryAt ?? null;
+      r = { verdict: "unknown", detail: `The check could not complete (${(err as Error).message}).` };
+      this.journal.patchByOp(opId, { retryAt });
+    }
+    if (r.verdict === "applied") this.journal.setState(opId, "finalized-ok", { executionResult: "STATE_ALREADY_APPLIED", lastError: r.detail, retryAt: null });
+    else if (r.verdict === "not-found") this.journal.setState(opId, "rejected", { lastError: `${r.detail} Nothing was applied; you can try again.`, retryAt: null });
+    else return this.keep(opId, r);
+    return r;
+  }
+
+  private keep(opId: string, r: { verdict: Verdict; detail: string }) {
+    this.journal.patchByOp(opId, { lastError: `Still uncertain: ${r.detail}` });
+    return r;
+  }
+
+  /** Deliberate user decision after checking the explorer. Never automatic. */
+  markNotSent(opId: string): void {
+    const e = this.journal.getByOp(opId);
+    if (!e || e.txHash || !["unknown-reconcile", "send-rate-limited"].includes(e.state)) return;
+    this.journal.setState(opId, "rejected", { lastError: "Marked by you as not sent after checking the account in the explorer.", retryAt: null });
   }
 
   /** Track strictly by the entry's own hash. Safe to call again to resume. */

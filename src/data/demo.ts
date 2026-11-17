@@ -82,6 +82,9 @@ export function createDemoAdapter(candles: Candle[], now0: number): ContractAdap
       const phases: ReceiptView[] = [{ phase: "processing" }, { phase: "decision" }, { phase: "finalizing" }];
       return phases[k - 1] ?? { phase: "finalized", executionOk: true, executionResult: "DEMO_OK" };
     },
+    async reconcile() {
+      return { verdict: "not-found" as const, detail: "Demo mode never sends anything." };
+    },
     async readBack(e) {
       const t = e.marketOpenTime;
       if (e.method === CONTRACT_METHODS.resolve) return { ok: !!(results.get(t) || cands.get(t)), observed: results.get(t) ? "resolved" : cands.get(t) ? "candidate" : "none" };

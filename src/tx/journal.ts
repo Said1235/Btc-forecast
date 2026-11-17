@@ -73,7 +73,7 @@ export class TxJournal {
   }
   /** Is there an unresolved operation for this exact wallet + market + method? */
   findUnresolved(wallet: string, marketId: string, method: string) {
-    return this.entries.find((e) => e.wallet === wallet && e.args.marketId === marketId && e.method === method && UNRESOLVED.has(e.state));
+    return this.entries.find((e) => e.wallet.toLowerCase() === wallet.toLowerCase() && e.args.marketId === marketId && e.method === method && UNRESOLVED.has(e.state));
   }
   forWallet(wallet: string | null): JournalEntry[] {
     if (!wallet) return [];
