@@ -14,4 +14,8 @@ npm run test:live    # real Binance request
 
 Details and what remains for the contract stage: `docs/FRONTEND_HANDOFF.md`.
 
-Deploy on Vercel: framework Vite, build `npm run build`, output `dist`.
+## Deploy on Vercel
+`vercel.json` is already configured (Vite, `npm run build`, output `dist`).
+1. https://vercel.com/new, import `Said1235/Btc-forecast`, press Deploy. No environment variables are needed yet.
+2. Open `<your-url>/#/app` and check the LIVE chip.
+CLI alternative: `npx vercel` (preview) or `npx vercel --prod`.
