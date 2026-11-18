@@ -95,6 +95,23 @@ describe("reads", () => {
   });
 });
 
+describe("receipt of a tx accepted with idle validators (real StudioNet shape, tx 0x1abd…)", () => {
+  const consensus = (leader: string) => ({
+    consensus_data: { leader_receipt: [{ mode: "leader", execution_result: leader }, { mode: "validator", vote: "agree", execution_result: "SUCCESS" }],
+      validators: [{ mode: "validator", vote: "idle", execution_result: "ERROR", genvm_result: { stderr: "Validator execution cancelled after quorum" } }] },
+  });
+  const rcpt = (tx: Record<string, unknown>) => createGenLayerAdapter(cfg, fake({ getTransaction: vi.fn(async () => tx) }).factory, mkGate()).txProvider(() => walletProv()).getReceipt(HASH);
+  it("leader SUCCESS is success even if the top-level result is not FINISHED_WITH_RETURN", async () => {
+    expect(await rcpt({ statusName: "FINALIZED", txExecutionResultName: "FINISHED_WITH_ERROR", ...consensus("SUCCESS") })).toMatchObject({ phase: "finalized", executionOk: true });
+    expect(await rcpt({ statusName: "FINALIZED", ...consensus("SUCCESS") })).toMatchObject({ executionOk: true });
+  });
+  it("leader ERROR is a failure and never blames the idle validators", async () => {
+    const r = await rcpt({ statusName: "FINALIZED", txExecutionResultName: "FINISHED_WITH_ERROR", ...consensus("ERROR") });
+    expect(r).toMatchObject({ executionOk: false });
+    expect((r as { detail?: string }).detail).not.toMatch(/cancelled after quorum/);
+  });
+});
+
 describe("writes", () => {
   it("sends the exact arguments for each method with value 0", async () => {
     const f = fake();
@@ -155,6 +172,8 @@ describe("receipts and read-back", () => {
   it("extracts failure text only when present", () => {
     expect(failureDetail({ a: { b: "[EXTERNAL] http status" } })).toBe("[EXTERNAL] http status");
     expect(failureDetail({ a: 1 })).toBeNull();
+    // idle validators ("cancelled after quorum") are not a failure reason
+    expect(failureDetail({ consensus_data: { leader_receipt: [{ mode: "leader", execution_result: "SUCCESS" }], validators: [{ vote: "idle", genvm_result: { stderr: "Validator execution cancelled after quorum" } }] } })).toBeNull();
   });
   it("read-back verifies each method with the ORIGINAL wallet", async () => {
     const f = fake();

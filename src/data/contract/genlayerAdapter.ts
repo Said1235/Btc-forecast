@@ -81,8 +81,20 @@ const unavailable = (e: unknown): Verified<never> => ({ status: "unavailable", r
 const bad = (what: string): Verified<never> => ({ status: "unavailable", reason: `Unexpected ${what} response from the contract (schema mismatch).` });
 const ok = <T,>(value: T): Verified<T> => ({ status: "ok", value, readAt: Date.now() });
 
-/** Best-effort text of why execution failed, if the SDK exposes it. */
-export function failureDetail(tx: Record<string, unknown>): string | null {
+type Receipt = Record<string, unknown>;
+const consensusOf = (tx: Record<string, unknown>) => rec(tx.consensus_data) ?? rec(tx.consensusData);
+/** The leader's own execution result ("SUCCESS" / "ERROR"), the only receipt that decides the outcome. */
+export function leaderExecution(tx: Record<string, unknown>): string | null {
+  const lr = consensusOf(tx)?.leader_receipt;
+  const list: unknown[] = Array.isArray(lr) ? lr : lr ? [lr] : [];
+  const leader = (list.map(rec).find((r): r is Receipt => !!r && r.mode === "leader") ?? rec(list[0])) as Receipt | null;
+  return leader && typeof leader.execution_result === "string" ? leader.execution_result : null;
+}
+
+/** Best-effort text of why execution failed. Idle validators (cancelled after quorum) are NOT a failure and are ignored. */
+export function failureDetail(full: Record<string, unknown>): string | null {
+  const c = consensusOf(full);
+  const tx = c ? { ...full, consensus_data: { ...c, validators: undefined } } : full;
   const seen = new Set<unknown>();
   const walk = (o: unknown, depth: number): string | null => {
     if (depth > 6 || !o || typeof o !== "object" || seen.has(o)) return null;
@@ -256,8 +268,12 @@ export function createGenLayerAdapter(cfg: GenLayerConfig, factory: SdkFactory =
           if (phase === "undetermined") return { phase, detail: `The network reported ${status}. The outcome is not settled.` };
           if (phase === "finalized") {
             const name = tx.txExecutionResultName as string | undefined;
-            const ok = executionSucceeded(name);
-            return { phase, executionOk: ok, executionResult: name ?? "UNKNOWN", detail: ok ? undefined : (failureDetail(tx) ?? undefined) };
+            const leader = leaderExecution(tx);
+            // The leader's receipt decides when present (validators cancelled after quorum are not failures);
+            // otherwise the top-level result. The mandatory contract read-back still has the last word.
+            const ok = leader ? leader === "SUCCESS" : executionSucceeded(name);
+            const label = `${name ?? "UNKNOWN"}${leader ? ` (leader ${leader})` : ""}`;
+            return { phase, executionOk: ok, executionResult: label, detail: ok ? undefined : (failureDetail(tx) ?? `Network result: ${label}.`) };
           }
           return { phase };
         },
