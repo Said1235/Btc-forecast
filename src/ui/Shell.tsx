@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useApp } from "../state/AppContext";
 import { shortAddress } from "../domain/format";
-import { Logo, useOutsideClose, Banner } from "./parts";
+import { Logo, useOutsideClose, Banner, scrollToSection, useActiveSection } from "./parts";
 
 export function ThemeButton() {
   const { theme, cycleTheme } = useApp();
@@ -47,7 +47,10 @@ export function WalletMenu() {
   );
 }
 
+const SECTIONS = [["how", "How it works"], ["market", "Market"], ["technology", "Technology"]] as const;
+
 export function TopBar({ page }: { page: "landing" | "app" }) {
+  const active = useActiveSection(page === "landing" ? SECTIONS.map(([id]) => id) : []);
   return (
     <header className="top">
       <div className="wrap top__in">
@@ -55,9 +58,9 @@ export function TopBar({ page }: { page: "landing" | "app" }) {
         <nav className="nav" aria-label="Main">
           {page === "landing" ? (
             <>
-              <a href="#how">How it works</a>
-              <a href="#market">Market</a>
-              <a href="#technology">Technology</a>
+              {SECTIONS.map(([id, label]) => (
+                <a key={id} href={`#${id}`} aria-current={active === id ? "location" : undefined} onClick={(e) => { e.preventDefault(); scrollToSection(id); }}>{label}</a>
+              ))}
             </>
           ) : (
             <>

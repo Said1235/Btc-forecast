@@ -60,11 +60,64 @@ export function useHashRoute(): "landing" | "app" {
   const get = (): "landing" | "app" => (location.hash.startsWith("#/app") ? "app" : "landing");
   const [r, setR] = useState(get);
   useEffect(() => {
-    const h = () => { setR(get()); window.scrollTo(0, 0); };
+    const h = () => {
+      const next = get();
+      // In-page anchors (#how, #market...) never change the route and never reset the scroll.
+      setR((prev) => {
+        if (prev !== next) window.scrollTo({ top: 0, behavior: "auto" });
+        return next;
+      });
+    };
     window.addEventListener("hashchange", h);
     return () => window.removeEventListener("hashchange", h);
   }, []);
   return r;
+}
+
+const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Smooth, offset-aware scroll to a section. Leaves the URL hash alone so the route stays intact. */
+export function scrollToSection(id: string): void {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth", block: "start" });
+}
+
+/** Id of the section currently under the header, for the active nav state. */
+export function useActiveSection(ids: string[]): string | null {
+  const [active, setActive] = useState<string | null>(null);
+  const key = ids.join(",");
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const list = key ? key.split(",") : [];
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) if (e.isIntersecting) setActive(e.target.id);
+      },
+      { rootMargin: "-40% 0px -55% 0px" },
+    );
+    list.forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el); });
+    const onTop = () => { if (window.scrollY < 120) setActive(null); };
+    window.addEventListener("scroll", onTop, { passive: true });
+    return () => { io.disconnect(); window.removeEventListener("scroll", onTop); };
+  }, [key]);
+  return active;
+}
+
+/** Fades a block in once when it first enters the viewport. Content is never hidden without JS. */
+export function Reveal({ children, as: Tag = "div", className = "" }: { children: ReactNode; as?: "div" | "section"; className?: string }) {
+  const ref = useRef<HTMLElement>(null);
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === "undefined" || reduceMotion());
+  useEffect(() => {
+    if (seen) return;
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setSeen(true); io.disconnect(); } }, { rootMargin: "0px 0px -12% 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  const C = Tag as "div";
+  return <C ref={ref as never} className={`reveal${seen ? " is-in" : ""} ${className}`.trim()}>{children}</C>;
 }
 
 /** Modal with focus trap, Escape to close and focus restore. */

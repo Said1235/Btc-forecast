@@ -12,7 +12,7 @@ function Routes() {
       <a className="skip" href="#main">Skip to content</a>
       <TopBar page={page} />
       <DemoBar />
-      {page === "landing" ? <Landing /> : <AppPage />}
+      <div key={page} className="page-in">{page === "landing" ? <Landing /> : <AppPage />}</div>
       <nav className="tabs" aria-label="Sections">
         <a href="#/" aria-current={page === "landing" ? "page" : undefined}>About</a>
         <a href="#/app" aria-current={page === "app" ? "page" : undefined}>Forecast</a>

@@ -222,3 +222,26 @@ button { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 .rise { animation: rise .35s ease-out both; }
 .row-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+
+/* ---- motion layer: smooth anchors, page transition, entrances, micro-interactions ---- */
+html { scroll-padding-top: 80px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+.page-in { animation: page-in .38s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s cubic-bezier(.2, .7, .2, 1), transform .6s cubic-bezier(.2, .7, .2, 1); will-change: opacity, transform; }
+.reveal.is-in { opacity: 1; transform: none; will-change: auto; }
+/* hero enters once on load, staggered */
+.hero .eyebrow, .hero h1, .hero p.lead, .hero .ctas, .hero__vis { animation: rise .7s cubic-bezier(.2, .7, .2, 1) both; }
+.hero h1 { animation-delay: .06s; } .hero p.lead { animation-delay: .14s; } .hero .ctas { animation-delay: .22s; } .hero__vis { animation-delay: .18s; }
+/* nav underline that draws */
+.nav a { position: relative; transition: color .2s; }
+.nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: 2px; height: 2px; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform .28s cubic-bezier(.2, .7, .2, 1); }
+.nav a:hover::after, .nav a[aria-current] ::after, .nav a[aria-current]::after { transform: scaleX(1); }
+.nav a[aria-current] { color: var(--ink); }
+/* buttons step on hover, press on click */
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: translateY(1px) scale(.985); }
+/* steps and cards lift */
+.steps li { transition: transform .25s ease; } .steps li:hover { transform: translateY(-2px); }
+.top { transition: box-shadow .25s ease, background-color .25s ease; }
+.chart { transition: opacity .3s ease; }

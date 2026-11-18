@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Glyph } from "../ui/parts";
+import { Glyph, Reveal, scrollToSection } from "../ui/parts";
 import { currentMarket, formatCountdown, msUntil } from "../domain/market";
 
 function OpenLine() {
@@ -40,14 +40,14 @@ export function Landing() {
             <p className="eyebrow">BTCUSDT · Daily forecast</p>
             <h1>Call Bitcoin's daily close.</h1>
             <p className="lead">Each UTC day, predict whether the Binance Spot BTCUSDT candle closes above its open (UP), below it (DOWN), or exactly at it (FLAT). A correct call earns one point. There are no stakes and no prizes.</p>
-            <div className="ctas"><a className="btn btn--primary" href="#/app">Open forecast</a><a className="btn" href="#how">How it works</a></div>
+            <div className="ctas"><a className="btn btn--primary" href="#/app">Open forecast</a><a className="btn" href="#how" onClick={(e) => { e.preventDefault(); scrollToSection("how"); }}>How it works</a></div>
           </div>
           <OpenLine />
         </div>
       </section>
 
       <section className="sec" id="how" aria-labelledby="how-h">
-        <div className="wrap">
+        <Reveal className="wrap">
           <p className="eyebrow">How it works</p>
           <h2 id="how-h">Three steps per day</h2>
           <ol className="steps">
@@ -55,11 +55,11 @@ export function Landing() {
             <li><span className="n">02</span><h3>Submit a prediction</h3><p>Pick UP, DOWN or FLAT for the next UTC day before its market opens. Once it opens, the call is locked.</p></li>
             <li><span className="n">03</span><h3>Check the result</h3><p>After the candle closes, the result and your points depend on the contract's settlement process, so they are not instant.</p></li>
           </ol>
-        </div>
+        </Reveal>
       </section>
 
       <section className="sec sec--alt" id="market" aria-labelledby="mk-h">
-        <div className="wrap">
+        <Reveal className="wrap">
           <p className="eyebrow">The market</p>
           <h2 id="mk-h">One rule, three outcomes</h2>
           <p className="lead">The comparison is arithmetic on the candle's open and close prices. Markets start and end at 00:00 UTC, whatever your local time zone.</p>
@@ -72,11 +72,11 @@ export function Landing() {
               </div>
             ))}
           </div>
-        </div>
+        </Reveal>
       </section>
 
       <section className="sec" id="technology" aria-labelledby="tc-h">
-        <div className="wrap">
+        <Reveal className="wrap">
           <p className="eyebrow">Technology</p>
           <h2 id="tc-h">What each part does</h2>
           <div className="tech">
@@ -85,7 +85,7 @@ export function Landing() {
             <div><h3>MetaMask and compatible wallets</h3><p>Authorize blockchain transactions with your approval. Connecting a wallet alone never sends one.</p></div>
           </div>
           <p className="notes">This is a prediction game, not a betting product: there are no deposits, tokens or payouts. The interface reads market data and, once connected, contract state. It does not settle markets or award points itself.</p>
-        </div>
+        </Reveal>
       </section>
 
       <footer className="foot">

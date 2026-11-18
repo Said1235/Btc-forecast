@@ -43,9 +43,19 @@ export function CandleChart({ candles, now, stale }: { candles: Candle[]; now: n
     return () => { c.remove(); chart.current = null; series.current = null; };
   }, [theme]);
 
+  // `now` ticks every second. Only the forming/closed state of the last candle matters to the drawing,
+  // so the series is rebuilt when that flips or the data changes, never on every tick.
+  const lastOpen = candles.length ? candles[candles.length - 1].openTime : 0;
+  const formingLast = candles.length > 0 && now < lastOpen + 86_400_000;
+  const nowRef = useRef(now);
+  useEffect(() => { nowRef.current = now; }); // declared before the data effect, so it runs first
+  const rangeSet = useRef(false);
+  useEffect(() => { rangeSet.current = false; }, [theme]);
+
   useEffect(() => {
     const s = series.current;
     if (!s) return;
+    const now = nowRef.current;
     byTime.current = new Map(candles.map((c) => [c.openTime, c]));
     const up = css("--up"), down = css("--down"), flat = css("--flat");
     s.setData(
@@ -61,9 +71,13 @@ export function CandleChart({ candles, now, stale }: { candles: Candle[]; now: n
     const last = candles[candles.length - 1];
     let line: ReturnType<typeof s.createPriceLine> | null = null;
     if (last && now < last.openTime + 86_400_000) line = s.createPriceLine({ price: last.open, color: css("--muted"), lineStyle: LineStyle.Dashed, lineWidth: 1, title: "Open" });
-    chart.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - 45), to: candles.length + 3 });
+    // Initial framing only: never fight the user's pan and zoom on later updates.
+    if (!rangeSet.current && candles.length) {
+      chart.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - 45), to: candles.length + 3 });
+      rangeSet.current = true;
+    }
     return () => { if (line) s.removePriceLine(line); };
-  }, [candles, now, theme]);
+  }, [candles, formingLast, theme]);
 
   const shown = hover ?? candles[candles.length - 1];
   const forming = !!shown && now < shown.openTime + 86_400_000;
