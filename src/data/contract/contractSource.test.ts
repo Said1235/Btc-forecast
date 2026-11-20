@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import src from "../../../contracts/btc_forecast.py?raw";
+import adapterSrc from "./genlayerAdapter.ts?raw";
 import { CONTRACT_METHODS } from "./adapter";
 import { STUDIO_DEFAULTS } from "../../config";
 import { CONFIRMATION_INTERVAL_MS, HORIZON_MS, RESOLUTION_GRACE_MS } from "../../domain/contractRules";
@@ -10,9 +10,6 @@ import { CONFIRMATION_INTERVAL_MS, HORIZON_MS, RESOLUTION_GRACE_MS } from "../..
  * the source deployed at STUDIO_DEFAULTS.contractAddress. These tests fail if the client calls a method the
  * contract does not have, or if the rules the UI shows drift from the contract's constants.
  */
-const root = process.cwd();
-const src = readFileSync(resolve(root, "contracts/btc_forecast.py"), "utf8");
-const adapterSrc = readFileSync(resolve(root, "src/data/contract/genlayerAdapter.ts"), "utf8");
 
 const methods = (kind: "write" | "view") =>
   [...src.matchAll(new RegExp(`@gl\\.public\\.${kind}\\s*\\n\\s*def (\\w+)\\(`, "g"))].map((m) => m[1]);
