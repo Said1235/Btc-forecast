@@ -27,7 +27,7 @@ Outcome rule: close above open is UP, below is DOWN, equal is FLAT.
 | Contract | `0x8AB7b7FB6771cb91d65623964df704c075e7e2b7` |
 | SDK | `genlayer-js` 1.1.8 using the official `studionet` preset |
 
-Contract source: https://github.com/Said1235/BTC-Forest-Intelligent-Contract
+Contract source is included in this repository: [`contracts/btc_forecast.py`](contracts/btc_forecast.py) (see [`contracts/README.md`](contracts/README.md) for the method mapping and the Binance settlement logic). Upstream: https://github.com/Said1235/BTC-Forest-Intelligent-Contract
 
 Methods used by the app: `submit_prediction`, `resolve_market`, `claim_points` (writes) and `get_prediction`, `get_market_candidate`, `get_market_result`, `get_user_points` (views).
 
@@ -67,6 +67,7 @@ The app refuses to send a transaction if the effective network is not StudioNet 
 Vite, React and TypeScript, with hash routing (`#/` landing, `#/app` game).
 
 ```
+contracts/   the authoritative Intelligent Contract, its tests, docs and deploy script
 src/
   domain/    pure UTC, market-window and outcome logic
   data/      Binance provider (cancellation, out-of-order protection, cache),

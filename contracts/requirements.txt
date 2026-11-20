@@ -1,0 +1,4 @@
+# Versions used to run the test suite (see README, "Known tooling issue")
+genlayer-test==0.29.2
+genvm-linter==0.11.0
+pytest
