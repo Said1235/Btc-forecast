@@ -1,6 +1,6 @@
 # BTC Forecast — Contract Design (post-audit)
 
-Contract: `contracts/btc_forecast.py` · class `BTCForecast` · SDK generation "A" (boilerplate naming) · runner `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`
+Contract: `contrats/btc_forecast.py` · class `BTCForecast` · SDK generation "A" (boilerplate naming) · runner `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`
 Companion report: `docs/BTC_FORECAST_SECURITY_AUDIT.md` (findings, evidence, residual risks).
 Labels: **[V]** verified by running code or reading the SDK/official docs · **[U]** unverified in this environment.
 

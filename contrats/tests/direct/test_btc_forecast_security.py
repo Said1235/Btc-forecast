@@ -1,4 +1,4 @@
-"""Adversarial / lifecycle / consensus tests for contracts/btc_forecast.py.
+"""Adversarial / lifecycle / consensus tests for contrats/btc_forecast.py.
 
 Direct Mode only (mocked Binance, leader path + explicit validator votes).
 Real multi-validator consensus (Studio) is NOT exercised here.

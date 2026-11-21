@@ -1,6 +1,6 @@
 # BTC Forecast — Security Audit, Architecture Review and Remediation (final)
 
-Audited contract: `contracts/btc_forecast.py` (single Intelligent Contract `BTCForecast`)
+Audited contract: `contrats/btc_forecast.py` (single Intelligent Contract `BTCForecast`)
 Design document: `docs/BTC_FORECAST_CONTRACT_DESIGN.md`
 Labels: **[CONFIRMED]** reproduced by running code · **[SOURCE]** established from SDK source / official docs · **[UNVERIFIED]** could not be checked here.
 Line numbers refer to the **final** contract unless marked "v1" (the first implementation, audited and then replaced).
@@ -49,7 +49,7 @@ Class: **V** = confirmed vulnerability · **D** = design weakness · **S** = dev
 
 ### A-01 — MEDIUM — Single-observation finalization, no grace (v1)
 v1 wrote an irreversible settlement from one observation and had no post-close delay; the authoritative rules forbid both ("Do not finalize a market from a single observation"). Not an exploit I could demonstrate; the impact would be an irreversible settlement from one transient, provisional or glitched response. (v1's "next candle exists" signal reduced, but did not remove, this.)
-**Fix** (`contracts/btc_forecast.py`): `RESOLUTION_GRACE_MS` and `CONFIRMATION_INTERVAL_MS` = 300,000 (L39–40); window check L406; `Candidate` storage; interval check L426 (and again after consensus L462); finalize only when `_candidate_matches` (L330, L464) — every evidence field; otherwise the candidate is replaced and the timer restarts.
+**Fix** (`contrats/btc_forecast.py`): `RESOLUTION_GRACE_MS` and `CONFIRMATION_INTERVAL_MS` = 300,000 (L39–40); window check L406; `Candidate` storage; interval check L426 (and again after consensus L462); finalize only when `_candidate_matches` (L330, L464) — every evidence field; otherwise the candidate is replaced and the timer restarts.
 **Regression tests** (`test_btc_forecast_security.py`): `test_F_no_resolution_before_candle_close_plus_grace[9 boundaries]`, `test_F_exact_lifecycle_by_an_arbitrary_third_party`, `test_F_candidate_is_not_a_settlement`, `test_G_identical_second_observation_finalizes`, `test_G_changed_evidence_never_finalizes_and_restarts_the_interval[5]`, `test_G_candidate_can_be_replaced_repeatedly`, `test_G_equivalent_representations_count_as_identical_evidence`. Mutants M01–M08 (no interval, no grace, off-by-one grace, first observation finalizes, match always true / ignoring a price, timer not reset) all killed.
 
 ### A-02 — MEDIUM — Unsafe nondeterministic API (v1) **[SOURCE]**
@@ -57,7 +57,7 @@ v1 wrote an irreversible settlement from one observation and had no post-close d
 **Fix:** L431–444 (`validate`, `gl.vm.run_nondet`). **Tests:** `test_B_no_llm_unsafe_api_float_or_regex_anywhere`, `test_E_*` (below), mutants M15, M16 killed.
 
 ### A-03 — MEDIUM — Deployment points at another contract
-`deploy/deployScript.ts` line 13 reads `contracts/football_bets.py`. Deploying with it would not deploy the audited source. **Correction:** `deploy/deployScript.ts` (delivered) changes only that path to `contracts/btc_forecast.py`; constructor args `[]` already match the zero-argument constructor. Nothing was deployed. Your own repository's deploy artifacts were not available: check them.
+`deploy/deployScript.ts` line 13 reads `contracts/football_bets.py`. Deploying with it would not deploy the audited source. **Correction:** `deploy/deployScript.ts` (delivered) changes only that path to `contrats/btc_forecast.py`; constructor args `[]` already match the zero-argument constructor. Nothing was deployed. Your own repository's deploy artifacts were not available: check them.
 
 ### A-04 — LOW **[CONFIRMED]** — Validator equality
 v1 compared `leader.calldata == mine`; with a `leader_result` carrying `float(T)` the validator accepted it. Unreachable through real calldata (no floats) but it weakened "identical evidence". **Fix:** `_same_record` L211 (canonical JSON). **Tests:** `test_V_tampered_leader_record_disagrees[15 cases incl. float/str/bool/None]`; mutant M17 killed.
@@ -96,7 +96,7 @@ Single-source trust in Binance (consensus verifies agreement, not truth; a later
 
 | Check | Result |
 |---|---|
-| Source compiled/deployed by the (corrected) script | `contracts/btc_forecast.py` — after correction A-03 |
+| Source compiled/deployed by the (corrected) script | `contrats/btc_forecast.py` — after correction A-03 |
 | Source executed by tests | `tests/direct/btc_helpers.py: CONTRACT = "contracts/btc_forecast.py"` — **same file** |
 | Delivered vs tested source | byte-identical, sha256 `06d4275b39cf0f274a4effd97f9c85f7b7f485d550c370ab0baa7548d47aba89` |
 | Runner header | `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6` (pinned hash, no `latest`) |

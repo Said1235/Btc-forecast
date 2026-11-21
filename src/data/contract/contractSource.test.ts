@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import src from "../../../contracts/btc_forecast.py?raw";
+import src from "../../../contrats/btc_forecast.py?raw";
 import adapterSrc from "./genlayerAdapter.ts?raw";
 import { CONTRACT_METHODS } from "./adapter";
 import { STUDIO_DEFAULTS } from "../../config";
 import { CONFIRMATION_INTERVAL_MS, HORIZON_MS, RESOLUTION_GRACE_MS } from "../../domain/contractRules";
 
 /**
- * The authoritative Intelligent Contract lives in this repository (contracts/btc_forecast.py), byte for byte
+ * The authoritative Intelligent Contract lives in this repository (contrats/btc_forecast.py), byte for byte
  * the source deployed at STUDIO_DEFAULTS.contractAddress. These tests fail if the client calls a method the
  * contract does not have, or if the rules the UI shows drift from the contract's constants.
  */

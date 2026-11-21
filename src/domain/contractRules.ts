@@ -1,6 +1,6 @@
 import { DAY_MS } from "./market";
 
-/** Policy constants copied from contracts/btc_forecast.py (the contract stays the authority). */
+/** Policy constants copied from contrats/btc_forecast.py (the contract stays the authority). */
 export const RESOLUTION_GRACE_MS = 300_000;
 export const CONFIRMATION_INTERVAL_MS = 300_000;
 export const HORIZON_MS = 7 * DAY_MS;

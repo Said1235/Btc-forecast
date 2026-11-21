@@ -2,7 +2,7 @@ import type { Outcome } from "../../domain/candle";
 import type { TxProvider } from "../../tx/types";
 
 /**
- * Frontend view of the deployed BTCForecast contract (contracts/btc_forecast.py).
+ * Frontend view of the deployed BTCForecast contract (contrats/btc_forecast.py).
  * Reads map 1:1 to its public views; writes (submit_prediction, resolve_market,
  * claim_points) go through the TxProvider so they are tracked by exact hash.
  */

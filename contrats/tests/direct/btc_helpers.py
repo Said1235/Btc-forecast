@@ -18,7 +18,7 @@ GRACE = 300_000
 CONF = 300_000
 T = int(datetime(2026, 11, 10, tzinfo=timezone.utc).timestamp()) * 1000
 OBS1 = T + DAY + GRACE  # first moment a candidate may be recorded
-CONTRACT = "contracts/btc_forecast.py"
+CONTRACT = "contrats/btc_forecast.py"
 URL_RE = r"^https://data-api\.binance\.vision/api/v3/klines\?symbol=BTCUSDT&interval=1d&timeZone=0&startTime=(\d+)&endTime=\1&limit=1$"
 
 # error message produced by the contract for each injected failure kind

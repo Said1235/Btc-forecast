@@ -1,4 +1,4 @@
-"""Functional + exact-arithmetic tests for contracts/btc_forecast.py (Direct Mode)."""
+"""Functional + exact-arithmetic tests for contrats/btc_forecast.py (Direct Mode)."""
 
 import json
 from decimal import Decimal, getcontext
